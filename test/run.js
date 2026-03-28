@@ -395,6 +395,19 @@ function testBetterSqliteDriver() {
   assert(true, 'close() does not throw');
 }
 
+async function testEmbeddings() {
+  console.log('\n--- Test: embeddings module ---');
+  const embeddings = require('../src/embeddings');
+
+  assert(embeddings.estimateTokens('hello world') > 0, 'Token estimation positive');
+  assert(embeddings.estimateTokens('hello world') < 10, 'Token estimation reasonable');
+
+  const texts = ['short', 'a'.repeat(1000), 'medium length text here', 'another one'];
+  const batches = embeddings.splitIntoBatches(texts, 500);
+  assert(batches.length >= 2, `Split into ${batches.length} batches (expected >= 2)`);
+  assert(batches.flat().length === texts.length, 'All texts in batches');
+}
+
 async function testUrlEnrichment() {
   console.log('\n--- Test: URL enrichment ---');
 
@@ -435,6 +448,7 @@ async function runAll() {
   testConversationFilter();
   testCliDriver();
   testBetterSqliteDriver();
+  await testEmbeddings();
   await testUrlEnrichment();
 
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
