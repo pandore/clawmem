@@ -2,7 +2,7 @@
  * schema.js — Creates and manages the clawmem SQLite schema.
  */
 
-const db = require('./db');
+const { createDriver } = require('./driver');
 
 const SCHEMA_SQL = `
 PRAGMA journal_mode=WAL;
@@ -120,6 +120,13 @@ CREATE TABLE IF NOT EXISTS extraction_state (
 );
 
 INSERT OR IGNORE INTO extraction_state (id) VALUES (1);
+
+-- Metadata key-value store
+CREATE TABLE IF NOT EXISTS clawmem_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at TEXT
+);
 `;
 
 function init(dbPath, { force = false } = {}) {
@@ -133,7 +140,9 @@ function init(dbPath, { force = false } = {}) {
     return { created: false, message: `Database already exists at ${dbPath}` };
   }
 
-  db.write(dbPath, SCHEMA_SQL);
+  const driver = createDriver(dbPath);
+  driver.write(SCHEMA_SQL);
+  driver.close();
 
   return { created: true, message: `Database created at ${dbPath}` };
 }

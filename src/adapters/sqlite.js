@@ -17,7 +17,7 @@
  *   }
  */
 
-const db = require('../db');
+const { createDriver, dbExists, esc } = require('../driver');
 
 function create(config) {
   const {
@@ -34,6 +34,13 @@ function create(config) {
   const senderCol = columns.sender || null;
   const timestampCol = columns.timestamp || null;
 
+  // Lazily-created driver for this source DB
+  let _driver = null;
+  function getDriver() {
+    if (!_driver) _driver = createDriver(dbPath);
+    return _driver;
+  }
+
   // Cache detected group conversation IDs
   let _groupConvIds = null;
 
@@ -48,8 +55,8 @@ function create(config) {
     const convCol = conversationFilter.column || 'conversation_id';
     const col = contentColumn || contentCol;
 
-    const stats = db.read(dbPath,
-      `SELECT ${convCol}, COUNT(*) as total, SUM(CASE WHEN ${col} LIKE '%${db.esc(marker)}%true%' THEN 1 ELSE 0 END) as group_msgs FROM ${table} GROUP BY ${convCol}`
+    const stats = getDriver().read(
+      `SELECT ${convCol}, COUNT(*) as total, SUM(CASE WHEN ${col} LIKE '%${esc(marker)}%true%' THEN 1 ELSE 0 END) as group_msgs FROM ${table} GROUP BY ${convCol}`
     );
 
     _groupConvIds = stats
@@ -63,11 +70,11 @@ function create(config) {
     name: 'sqlite',
 
     validate() {
-      if (!db.exists(dbPath)) {
+      if (!dbExists(dbPath)) {
         return { ok: false, error: `Database not found: ${dbPath}` };
       }
 
-      const tables = db.read(dbPath, "SELECT name FROM sqlite_master WHERE type='table'");
+      const tables = getDriver().read("SELECT name FROM sqlite_master WHERE type='table'");
       const tableNames = tables.map(t => t.name);
 
       if (!tableNames.includes(table)) {
@@ -84,14 +91,14 @@ function create(config) {
     },
 
     getMessages(afterId) {
-      let where = `${idCol} > '${db.esc(String(afterId))}'`;
+      let where = `${idCol} > '${esc(String(afterId))}'`;
       if (filter) where += ` AND (${filter})`;
 
       // Apply conversation filter
       const groupIds = detectGroupConversations();
       if (groupIds && groupIds.length > 0) {
         const convCol = conversationFilter.column || 'conversation_id';
-        const idList = groupIds.map(id => `${convCol} = '${db.esc(String(id))}'`).join(' OR ');
+        const idList = groupIds.map(id => `${convCol} = '${esc(String(id))}'`).join(' OR ');
         where += ` AND (${idList})`;
       }
 
@@ -100,7 +107,7 @@ function create(config) {
       if (timestampCol) selectCols.push(timestampCol);
 
       const query = `SELECT ${selectCols.join(', ')} FROM ${table} WHERE ${where} ORDER BY ${idCol} ASC`;
-      const rows = db.read(dbPath, query);
+      const rows = getDriver().read(query);
 
       return rows.map(row => {
         if (contentParser) {
@@ -123,7 +130,7 @@ function create(config) {
     },
 
     describe() {
-      const cols = db.read(dbPath, `PRAGMA table_info(${table})`);
+      const cols = getDriver().read(`PRAGMA table_info(${table})`);
       return {
         path: dbPath,
         table,

@@ -15,14 +15,19 @@
  *     columns: { id: 'id', content: 'text', sender: 'author', timestamp: 'created_at' },
  *   });
  *
+ *   // Create a driver
+ *   const driver = clawmem.createDriver('./my-memory.db');
+ *
  *   // Run extraction
- *   await clawmem.extract(adapter, './my-memory.db', {
+ *   await clawmem.extract(adapter, driver, {
  *     llm: { baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-...', model: 'gpt-4o-mini' },
  *   });
  *
  *   // Query
- *   clawmem.query.searchFacts('./my-memory.db', 'machine learning');
- *   clawmem.query.whoKnows('./my-memory.db', 'python');
+ *   clawmem.query.searchFacts(driver, 'machine learning');
+ *   clawmem.query.whoKnows(driver, 'python');
+ *
+ *   driver.close();
  */
 
 const schema = require('./schema');
@@ -32,6 +37,7 @@ const config = require('./config');
 const sqliteAdapter = require('./adapters/sqlite');
 const jsonlAdapter = require('./adapters/jsonl');
 const urlEnricher = require('./enrichers/url');
+const { createDriver, dbExists, esc } = require('./driver');
 
 module.exports = {
   // Schema
@@ -42,6 +48,11 @@ module.exports = {
 
   // Config
   loadConfig: config.load,
+
+  // Driver
+  createDriver,
+  dbExists,
+  esc,
 
   // Query helpers
   query: {

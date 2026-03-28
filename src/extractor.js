@@ -6,14 +6,15 @@ const llm = require('./llm');
 const store = require('./store');
 const urlEnricher = require('./enrichers/url');
 
-async function run(adapter, memoryDbPath, config, options = {}) {
+async function run(adapter, driver, config, options = {}) {
   const { dryRun = false, reprocess = false, rosterPath = null, enrichUrls = true } = options;
   const { batchSize = 40, minMessages = 5 } = config;
 
   const log = (msg) => console.log(msg);
 
   log(`[${new Date().toISOString()}] clawmem extraction`);
-  log(`Memory DB: ${memoryDbPath}`);
+  log(`Memory DB: ${driver.dbPath}`);
+  log(`Backend: ${driver.backend}`);
   log(`Source: ${adapter.name}`);
 
   // Validate adapter
@@ -26,11 +27,11 @@ async function run(adapter, memoryDbPath, config, options = {}) {
   // Reset state if reprocessing
   if (reprocess) {
     log('Resetting extraction state...');
-    store.resetState(memoryDbPath);
+    store.resetState(driver);
   }
 
   // Get cursor position
-  const state = store.getState(memoryDbPath);
+  const state = store.getState(driver);
   const lastId = state?.last_processed_id || '0';
   log(`Last processed ID: ${lastId}`);
 
@@ -40,7 +41,7 @@ async function run(adapter, memoryDbPath, config, options = {}) {
 
   if (messages.length < minMessages) {
     log(`Below threshold (${minMessages}). Skipping.`);
-    store.updateState(memoryDbPath, {
+    store.updateState(driver, {
       lastProcessedId: lastId,
       messagesProcessed: 0,
       factsExtracted: 0,
@@ -86,7 +87,7 @@ async function run(adapter, memoryDbPath, config, options = {}) {
       const extracted = await llm.extract(batch, config.llm);
       const messageDate = batch[0].timestamp?.split('T')[0] || new Date().toISOString().split('T')[0];
 
-      const result = store.processExtraction(memoryDbPath, extracted, messageDate);
+      const result = store.processExtraction(driver, extracted, messageDate);
       totalFacts += result.totalFacts;
       totalTopics += result.totalTopics;
       totalMembers += result.totalMembers;
@@ -107,7 +108,7 @@ async function run(adapter, memoryDbPath, config, options = {}) {
 
   // Update state
   if (!dryRun) {
-    store.updateState(memoryDbPath, {
+    store.updateState(driver, {
       lastProcessedId: maxId,
       messagesProcessed: messages.length,
       factsExtracted: totalFacts,
@@ -118,7 +119,7 @@ async function run(adapter, memoryDbPath, config, options = {}) {
   // Generate roster file if configured
   if (!dryRun && rosterPath) {
     const fs = require('fs');
-    const roster = store.generateRoster(memoryDbPath);
+    const roster = store.generateRoster(driver);
     fs.writeFileSync(rosterPath, roster.content);
     log(`Roster: ${roster.count} members → ${rosterPath}`);
   }

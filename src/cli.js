@@ -17,6 +17,7 @@
 const path = require('path');
 const clawmem = require('./index');
 const config = require('./config');
+const { createDriver, dbExists } = require('./driver');
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -39,20 +40,22 @@ async function main() {
     }
 
     case 'extract': {
-      const db = require('./db');
-      if (!db.exists(cfg.memoryDbPath)) {
+      if (!dbExists(cfg.memoryDbPath)) {
         console.log('Memory database not found. Run `clawmem init` first.');
         process.exit(1);
       }
 
+      const driver = createDriver(cfg.memoryDbPath);
       const adapter = createAdapter(cfg.source);
       const rosterOutput = flag('roster') ? args[args.indexOf('--roster') + 1] : (cfg.rosterPath || null);
-      const result = await clawmem.extract(adapter, cfg.memoryDbPath, cfg, {
+      const result = await clawmem.extract(adapter, driver, cfg, {
         dryRun: flag('dry-run'),
         reprocess: flag('reprocess'),
         rosterPath: rosterOutput,
         enrichUrls: !flag('no-enrich'),
       });
+
+      driver.close();
 
       if (!result.ok) {
         console.error(`Extraction failed: ${result.error}`);
@@ -62,13 +65,15 @@ async function main() {
     }
 
     case 'stats': {
-      const db = require('./db');
-      if (!db.exists(cfg.memoryDbPath)) {
+      if (!dbExists(cfg.memoryDbPath)) {
         console.log('Memory database not found. Run `clawmem init` first.');
         process.exit(1);
       }
 
-      const stats = clawmem.query.getStats(cfg.memoryDbPath);
+      const driver = createDriver(cfg.memoryDbPath);
+      const stats = clawmem.query.getStats(driver);
+      driver.close();
+
       console.log('\n=== clawmem stats ===');
       console.log(`Members:  ${stats.members}`);
       console.log(`Facts:    ${stats.facts}`);
@@ -87,8 +92,10 @@ async function main() {
         process.exit(1);
       }
 
-      const facts = clawmem.query.searchFacts(cfg.memoryDbPath, query);
-      const topics = clawmem.query.searchTopics(cfg.memoryDbPath, query);
+      const driver = createDriver(cfg.memoryDbPath);
+      const facts = clawmem.query.searchFacts(driver, query);
+      const topics = clawmem.query.searchTopics(driver, query);
+      driver.close();
 
       if (facts.length > 0) {
         console.log('\n--- Facts ---');
@@ -118,7 +125,10 @@ async function main() {
         process.exit(1);
       }
 
-      const members = clawmem.query.whoKnows(cfg.memoryDbPath, keyword);
+      const driver = createDriver(cfg.memoryDbPath);
+      const members = clawmem.query.whoKnows(driver, keyword);
+      driver.close();
+
       if (members.length > 0) {
         console.log(`\nMembers who know about "${keyword}":`);
         for (const m of members) {
@@ -134,16 +144,19 @@ async function main() {
     }
 
     case 'roster': {
-      const db = require('./db');
-      if (!db.exists(cfg.memoryDbPath)) {
+      if (!dbExists(cfg.memoryDbPath)) {
         console.log('Memory database not found. Run `clawmem init` first.');
         process.exit(1);
       }
 
-      const roster = clawmem.query.generateRoster(cfg.memoryDbPath);
+      const driver = createDriver(cfg.memoryDbPath);
+      const roster = clawmem.query.generateRoster(driver);
+      driver.close();
+
       const outputIdx = args.indexOf('--output');
       const outputPath = outputIdx >= 0 ? args[outputIdx + 1] : null;
       if (outputPath) {
+        const fs = require('fs');
         fs.writeFileSync(outputPath, roster.content);
         console.log(`Roster: ${roster.count} members → ${outputPath}`);
       } else {

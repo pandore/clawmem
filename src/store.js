@@ -2,7 +2,7 @@
  * store.js — Read/write extracted knowledge to memory.db.
  */
 
-const db = require('./db');
+const { esc } = require('./driver');
 
 function mergeCSV(existing, incoming) {
   const existingSet = new Set(
@@ -20,9 +20,9 @@ function mergeCSV(existing, incoming) {
   return result.join(', ');
 }
 
-function upsertMember(dbPath, member, messageDate) {
-  const existing = db.read(dbPath,
-    `SELECT id, expertise, projects FROM members WHERE display_name='${db.esc(member.display_name)}' OR username='${db.esc(member.username)}'`
+function upsertMember(driver, member, messageDate) {
+  const existing = driver.read(
+    `SELECT id, expertise, projects FROM members WHERE display_name='${esc(member.display_name)}' OR username='${esc(member.username)}'`
   );
 
   if (existing.length > 0) {
@@ -30,43 +30,43 @@ function upsertMember(dbPath, member, messageDate) {
     const mergedExpertise = mergeCSV(e.expertise, member.expertise);
     const mergedProjects = mergeCSV(e.projects, member.projects);
 
-    db.write(dbPath, `
+    driver.write(`
       UPDATE members SET
-        expertise = '${db.esc(mergedExpertise)}',
-        projects = '${db.esc(mergedProjects)}',
-        last_seen = '${db.esc(messageDate)}',
+        expertise = '${esc(mergedExpertise)}',
+        projects = '${esc(mergedProjects)}',
+        last_seen = '${esc(messageDate)}',
         updated_at = datetime('now')
       WHERE id = ${e.id};
     `);
     return e.id;
   } else {
-    db.write(dbPath, `
+    driver.write(`
       INSERT INTO members (username, display_name, expertise, projects, first_seen, last_seen)
       VALUES (
-        '${db.esc(member.username || '')}',
-        '${db.esc(member.display_name)}',
-        '${db.esc(member.expertise || '')}',
-        '${db.esc(member.projects || '')}',
-        '${db.esc(messageDate)}',
-        '${db.esc(messageDate)}'
+        '${esc(member.username || '')}',
+        '${esc(member.display_name)}',
+        '${esc(member.expertise || '')}',
+        '${esc(member.projects || '')}',
+        '${esc(messageDate)}',
+        '${esc(messageDate)}'
       );
     `);
     // Query back the id (last_insert_rowid doesn't work across separate sqlite3 processes)
-    const inserted = db.read(dbPath,
-      `SELECT id FROM members WHERE display_name='${db.esc(member.display_name)}' OR username='${db.esc(member.username)}'`
+    const inserted = driver.read(
+      `SELECT id FROM members WHERE display_name='${esc(member.display_name)}' OR username='${esc(member.username)}'`
     );
     return inserted[0]?.id;
   }
 }
 
-function insertFact(dbPath, fact, memberId, messageDate) {
+function insertFact(driver, fact, memberId, messageDate) {
   // Dedup strategy: extract key terms from content and check FTS for similar existing facts.
   // This catches semantically similar facts even when LLM rephrases them.
   const content = fact.content || '';
 
   // 1. Exact prefix match (fast path)
-  const prefix = db.esc(content.substring(0, 80).toLowerCase());
-  const exactMatch = db.read(dbPath,
+  const prefix = esc(content.substring(0, 80).toLowerCase());
+  const exactMatch = driver.read(
     `SELECT id FROM facts WHERE LOWER(SUBSTR(content, 1, 80)) = '${prefix}'`
   );
   if (exactMatch.length > 0) return false;
@@ -76,22 +76,22 @@ function insertFact(dbPath, fact, memberId, messageDate) {
   //    Using more risks missing rephrased duplicates.
   const keywords = extractKeywords(content);
   if (keywords.length >= 2) {
-    const ftsQuery = db.esc(keywords.slice(0, 2).join(' AND '));
-    const ftsMatch = db.read(dbPath,
-      `SELECT id FROM facts WHERE id IN (SELECT rowid FROM facts_fts WHERE facts_fts MATCH '${ftsQuery}') AND category = '${db.esc(fact.category)}' LIMIT 1`
+    const ftsQuery = esc(keywords.slice(0, 2).join(' AND '));
+    const ftsMatch = driver.read(
+      `SELECT id FROM facts WHERE id IN (SELECT rowid FROM facts_fts WHERE facts_fts MATCH '${ftsQuery}') AND category = '${esc(fact.category)}' LIMIT 1`
     );
     if (ftsMatch.length > 0) return false;
   }
 
-  db.write(dbPath, `
+  driver.write(`
     INSERT INTO facts (category, content, source_member_id, tags, confidence, message_date)
     VALUES (
-      '${db.esc(fact.category)}',
-      '${db.esc(content)}',
+      '${esc(fact.category)}',
+      '${esc(content)}',
       ${memberId || 'NULL'},
-      '${db.esc(fact.tags || '')}',
+      '${esc(fact.tags || '')}',
       ${parseFloat(fact.confidence) || 0.8},
-      '${db.esc(messageDate)}'
+      '${esc(messageDate)}'
     );
   `);
   return true;
@@ -119,38 +119,38 @@ function extractKeywords(text) {
     .filter(w => w.length > 2 && !stopwords.has(w));
 }
 
-function insertTopic(dbPath, topic, messageDate) {
+function insertTopic(driver, topic, messageDate) {
   // Dedup: check for existing topic with similar name via FTS (2 keywords)
   const nameKeywords = extractKeywords(topic.name);
   if (nameKeywords.length >= 2) {
-    const ftsQuery = db.esc(nameKeywords.slice(0, 2).join(' AND '));
-    const existing = db.read(dbPath,
+    const ftsQuery = esc(nameKeywords.slice(0, 2).join(' AND '));
+    const existing = driver.read(
       `SELECT id FROM topics WHERE id IN (SELECT rowid FROM topics_fts WHERE topics_fts MATCH '${ftsQuery}') LIMIT 1`
     );
     if (existing.length > 0) return false;
   }
 
-  db.write(dbPath, `
+  driver.write(`
     INSERT INTO topics (name, summary, participants, message_date, tags)
     VALUES (
-      '${db.esc(topic.name)}',
-      '${db.esc(topic.summary || '')}',
-      '${db.esc(topic.participants || '')}',
-      '${db.esc(messageDate)}',
-      '${db.esc(topic.tags || '')}'
+      '${esc(topic.name)}',
+      '${esc(topic.summary || '')}',
+      '${esc(topic.participants || '')}',
+      '${esc(messageDate)}',
+      '${esc(topic.tags || '')}'
     );
   `);
   return true;
 }
 
-function processExtraction(dbPath, extracted, messageDate) {
+function processExtraction(driver, extracted, messageDate) {
   let totalFacts = 0, totalTopics = 0, totalMembers = 0;
   const memberIdMap = {};
 
   if (extracted.members && Array.isArray(extracted.members)) {
     for (const member of extracted.members) {
       if (!member.display_name) continue;
-      const id = upsertMember(dbPath, member, messageDate);
+      const id = upsertMember(driver, member, messageDate);
       memberIdMap[member.display_name.toLowerCase()] = id;
       totalMembers++;
     }
@@ -162,7 +162,7 @@ function processExtraction(dbPath, extracted, messageDate) {
       const memberId = fact.source_member
         ? memberIdMap[fact.source_member.toLowerCase()] || null
         : null;
-      if (insertFact(dbPath, fact, memberId, messageDate)) {
+      if (insertFact(driver, fact, memberId, messageDate)) {
         totalFacts++;
       }
     }
@@ -171,7 +171,7 @@ function processExtraction(dbPath, extracted, messageDate) {
   if (extracted.topics && Array.isArray(extracted.topics)) {
     for (const topic of extracted.topics) {
       if (!topic.name) continue;
-      insertTopic(dbPath, topic, messageDate);
+      insertTopic(driver, topic, messageDate);
       totalTopics++;
     }
   }
@@ -179,15 +179,15 @@ function processExtraction(dbPath, extracted, messageDate) {
   return { totalFacts, totalTopics, totalMembers };
 }
 
-function getState(dbPath) {
-  const rows = db.read(dbPath, 'SELECT * FROM extraction_state WHERE id=1');
+function getState(driver) {
+  const rows = driver.read('SELECT * FROM extraction_state WHERE id=1');
   return rows[0] || null;
 }
 
-function updateState(dbPath, { lastProcessedId, messagesProcessed, factsExtracted, topicsExtracted }) {
-  db.write(dbPath, `
+function updateState(driver, { lastProcessedId, messagesProcessed, factsExtracted, topicsExtracted }) {
+  driver.write(`
     UPDATE extraction_state SET
-      last_processed_id = '${db.esc(String(lastProcessedId))}',
+      last_processed_id = '${esc(String(lastProcessedId))}',
       total_messages_processed = total_messages_processed + ${messagesProcessed},
       total_facts_extracted = total_facts_extracted + ${factsExtracted},
       total_topics_extracted = total_topics_extracted + ${topicsExtracted},
@@ -197,15 +197,15 @@ function updateState(dbPath, { lastProcessedId, messagesProcessed, factsExtracte
   `);
 }
 
-function resetState(dbPath) {
-  db.write(dbPath, "UPDATE extraction_state SET last_processed_id = '0', total_messages_processed = 0 WHERE id = 1;");
+function resetState(driver) {
+  driver.write("UPDATE extraction_state SET last_processed_id = '0', total_messages_processed = 0 WHERE id = 1;");
 }
 
-function getStats(dbPath) {
-  const members = db.read(dbPath, 'SELECT COUNT(*) as c FROM members');
-  const facts = db.read(dbPath, 'SELECT COUNT(*) as c FROM facts');
-  const topics = db.read(dbPath, 'SELECT COUNT(*) as c FROM topics');
-  const state = getState(dbPath);
+function getStats(driver) {
+  const members = driver.read('SELECT COUNT(*) as c FROM members');
+  const facts = driver.read('SELECT COUNT(*) as c FROM facts');
+  const topics = driver.read('SELECT COUNT(*) as c FROM topics');
+  const state = getState(driver);
 
   return {
     members: parseInt(members[0]?.c) || 0,
@@ -214,39 +214,41 @@ function getStats(dbPath) {
     messagesProcessed: parseInt(state?.total_messages_processed) || 0,
     lastProcessedId: state?.last_processed_id || '0',
     lastRun: state?.last_run_at || 'never',
+    driver: driver.backend,
+    vectors: driver.capabilities.vectors,
   };
 }
 
 // --- Query helpers ---
 
-function searchFacts(dbPath, query, limit = 15, minConfidence = 0) {
-  let where = `f.id IN (SELECT rowid FROM facts_fts WHERE facts_fts MATCH '${db.esc(query)}')`;
+function searchFacts(driver, query, limit = 15, minConfidence = 0) {
+  let where = `f.id IN (SELECT rowid FROM facts_fts WHERE facts_fts MATCH '${esc(query)}')`;
   if (minConfidence > 0) where += ` AND f.confidence >= ${minConfidence}`;
-  return db.read(dbPath,
+  return driver.read(
     `SELECT f.*, m.display_name as source FROM facts f LEFT JOIN members m ON f.source_member_id = m.id WHERE ${where} ORDER BY f.confidence DESC, f.created_at DESC LIMIT ${limit}`
   );
 }
 
-function searchTopics(dbPath, query, limit = 10) {
-  return db.read(dbPath,
-    `SELECT * FROM topics WHERE id IN (SELECT rowid FROM topics_fts WHERE topics_fts MATCH '${db.esc(query)}') ORDER BY created_at DESC LIMIT ${limit}`
+function searchTopics(driver, query, limit = 10) {
+  return driver.read(
+    `SELECT * FROM topics WHERE id IN (SELECT rowid FROM topics_fts WHERE topics_fts MATCH '${esc(query)}') ORDER BY created_at DESC LIMIT ${limit}`
   );
 }
 
-function searchMembers(dbPath, query) {
-  return db.read(dbPath,
-    `SELECT * FROM members WHERE id IN (SELECT rowid FROM members_fts WHERE members_fts MATCH '${db.esc(query)}')`
+function searchMembers(driver, query) {
+  return driver.read(
+    `SELECT * FROM members WHERE id IN (SELECT rowid FROM members_fts WHERE members_fts MATCH '${esc(query)}')`
   );
 }
 
-function whoKnows(dbPath, keyword) {
-  return db.read(dbPath,
-    `SELECT display_name, username, expertise, projects FROM members WHERE expertise LIKE '%${db.esc(keyword)}%' OR projects LIKE '%${db.esc(keyword)}%' ORDER BY last_seen DESC`
+function whoKnows(driver, keyword) {
+  return driver.read(
+    `SELECT display_name, username, expertise, projects FROM members WHERE expertise LIKE '%${esc(keyword)}%' OR projects LIKE '%${esc(keyword)}%' ORDER BY last_seen DESC`
   );
 }
 
-function generateRoster(dbPath, { maxExpertise = 5, maxProjects = 3 } = {}) {
-  const members = db.read(dbPath, 'SELECT display_name, expertise, projects FROM members ORDER BY display_name');
+function generateRoster(driver, { maxExpertise = 5, maxProjects = 3 } = {}) {
+  const members = driver.read('SELECT display_name, expertise, projects FROM members ORDER BY display_name');
   const lines = ['# Community Members', ''];
   for (const m of members) {
     const name = m.display_name || '';

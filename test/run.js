@@ -123,8 +123,10 @@ function testJsonlAdapter() {
 function testStore() {
   console.log('\n--- Test: store operations ---');
 
+  const memDriver = createDriver(MEMORY_DB);
+
   // Direct store operations (simulating what extraction does)
-  store.processExtraction(MEMORY_DB, {
+  store.processExtraction(memDriver, {
     members: [
       { display_name: 'Alice', username: 'alice', expertise: 'RAG, LangChain', projects: 'pipeline' },
       { display_name: 'Bob', username: 'bob', expertise: 'LlamaIndex, embeddings', projects: '' },
@@ -138,55 +140,59 @@ function testStore() {
     ],
   }, '2026-03-15');
 
-  const stats = store.getStats(MEMORY_DB);
+  const stats = store.getStats(memDriver);
   assert(stats.members === 2, `${stats.members} members (expected 2)`);
   assert(stats.facts === 2, `${stats.facts} facts (expected 2)`);
   assert(stats.topics === 1, `${stats.topics} topics (expected 1)`);
 
   // FTS search
-  const ragFacts = store.searchFacts(MEMORY_DB, 'RAG');
+  const ragFacts = store.searchFacts(memDriver, 'RAG');
   assert(ragFacts.length === 2, `FTS found ${ragFacts.length} RAG facts (expected 2)`);
 
-  const ragTopics = store.searchTopics(MEMORY_DB, 'RAG');
+  const ragTopics = store.searchTopics(memDriver, 'RAG');
   assert(ragTopics.length === 1, `FTS found ${ragTopics.length} RAG topics (expected 1)`);
 
   // Who knows
-  const ragExperts = store.whoKnows(MEMORY_DB, 'RAG');
+  const ragExperts = store.whoKnows(memDriver, 'RAG');
   assert(ragExperts.length === 1, `Found ${ragExperts.length} RAG experts (expected 1)`);
 
   // Dedup: insert same fact again (exact match)
-  store.processExtraction(MEMORY_DB, {
+  store.processExtraction(memDriver, {
     members: [{ display_name: 'Alice', username: 'alice', expertise: 'RAG, Python', projects: 'pipeline, new-project' }],
     facts: [{ category: 'tool', content: 'LangChain works well for RAG with chunk size 512', source_member: 'alice', tags: 'rag', confidence: 0.9 }],
     topics: [],
   }, '2026-03-15');
 
-  const stats2 = store.getStats(MEMORY_DB);
+  const stats2 = store.getStats(memDriver);
   assert(stats2.members === 2, `Still ${stats2.members} members after upsert (expected 2)`);
   assert(stats2.facts === 2, `Still ${stats2.facts} facts — exact dedup worked (expected 2)`);
 
   // Dedup: insert semantically similar fact (LLM rephrased it)
-  store.processExtraction(MEMORY_DB, {
+  store.processExtraction(memDriver, {
     members: [],
     facts: [{ category: 'tool', content: 'LangChain is effective for RAG pipelines, especially with a chunk size of 512 tokens', source_member: 'alice', tags: 'rag, langchain', confidence: 0.9 }],
     topics: [{ name: 'Comparing RAG Pipeline Tools', summary: 'LangChain vs LlamaIndex comparison', participants: 'Alice, Bob', tags: 'rag' }],
   }, '2026-03-15');
 
-  const stats3 = store.getStats(MEMORY_DB);
+  const stats3 = store.getStats(memDriver);
   assert(stats3.facts === 2, `Still ${stats3.facts} facts — semantic dedup worked (expected 2)`);
   assert(stats3.topics === 1, `Still ${stats3.topics} topics — topic dedup worked (expected 1)`);
 
   // Check member expertise was merged
-  const alice = store.searchMembers(MEMORY_DB, 'Alice');
+  const alice = store.searchMembers(memDriver, 'Alice');
   assert(alice.length > 0 && alice[0].expertise.includes('Python'), 'Alice expertise merged with Python');
   assert(alice.length > 0 && alice[0].projects.includes('new-project'), 'Alice projects merged');
+
+  memDriver.close();
 }
 
 function testConfidenceFiltering() {
   console.log('\n--- Test: confidence filtering ---');
 
+  const memDriver = createDriver(MEMORY_DB);
+
   // Insert facts with different confidence levels
-  store.processExtraction(MEMORY_DB, {
+  store.processExtraction(memDriver, {
     members: [],
     facts: [
       { category: 'tool', content: 'High confidence fact about Docker pricing at $5/month', source_member: 'alice', tags: 'docker, pricing', confidence: 0.95 },
@@ -197,15 +203,15 @@ function testConfidenceFiltering() {
   }, '2026-03-16');
 
   // Search without filter
-  const allFacts = store.searchFacts(MEMORY_DB, 'Docker OR Kubernetes OR AWS');
+  const allFacts = store.searchFacts(memDriver, 'Docker OR Kubernetes OR AWS');
   assert(allFacts.length >= 3, `Found ${allFacts.length} facts without filter (expected >= 3)`);
 
   // Search with minConfidence 0.75
-  const highFacts = store.searchFacts(MEMORY_DB, 'Docker OR Kubernetes OR AWS', 15, 0.75);
+  const highFacts = store.searchFacts(memDriver, 'Docker OR Kubernetes OR AWS', 15, 0.75);
   assert(highFacts.length >= 2, `Found ${highFacts.length} facts with confidence >= 0.75 (expected >= 2)`);
 
   // Search with minConfidence 0.9
-  const veryHigh = store.searchFacts(MEMORY_DB, 'Docker OR Kubernetes OR AWS', 15, 0.9);
+  const veryHigh = store.searchFacts(memDriver, 'Docker OR Kubernetes OR AWS', 15, 0.9);
   assert(veryHigh.length >= 1, `Found ${veryHigh.length} facts with confidence >= 0.9 (expected >= 1)`);
 
   // Verify ordering: high confidence first
@@ -213,12 +219,17 @@ function testConfidenceFiltering() {
     assert(parseFloat(highFacts[0].confidence) >= parseFloat(highFacts[1].confidence),
       'Facts ordered by confidence descending');
   }
+
+  memDriver.close();
 }
 
 function testRoster() {
   console.log('\n--- Test: roster generation ---');
 
-  const roster = store.generateRoster(MEMORY_DB);
+  const memDriver = createDriver(MEMORY_DB);
+  const roster = store.generateRoster(memDriver);
+  memDriver.close();
+
   assert(roster.count >= 2, `Roster has ${roster.count} members (expected >= 2)`);
   assert(roster.content.startsWith('# Community Members'), 'Roster starts with header');
   assert(roster.content.includes('Alice'), 'Roster contains Alice');
