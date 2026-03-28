@@ -4,38 +4,44 @@
 [![Node.js >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 [![Version](https://img.shields.io/badge/version-0.4.0-orange.svg)](package.json)
 
-**Persistent memory for group chats.** Reads messages from any source, extracts structured knowledge via any LLM, stores it in SQLite with full-text and hybrid vector search.
+**Your group chat has years of knowledge buried in thousands of messages.** Who knows what, what was decided, what tasks were assigned, what questions were answered -- it's all there, but impossible to find.
 
-Give your AI agent a brain that remembers what your group talks about.
-
-```
-Chat Source  -->  Adapter  -->  LLM Extraction  -->  SQLite + FTS5
-                                                          |
-                                             (optional: better-sqlite3 + sqlite-vec)
-                                                          |
-                                                   Embedding Pipeline --> vec0 tables
-                                                          |
-                                                   Hybrid Search (FTS5 + kNN + RRF)
-```
+Lizardbrain reads your chat messages, extracts the important stuff using any LLM, and stores it in a searchable database. Run it on a cron, and your AI agent always knows what your group has been talking about.
 
 ---
 
-## Highlights
+## What problems does it solve?
 
-- **Profile-driven** -- choose what to extract: knowledge communities, team chats, project groups, or define your own
-- **7 entity types** -- members, facts, topics, decisions, tasks, questions, events
-- **Model-agnostic** -- works with any OpenAI-compatible API (OpenAI, Gemini, Groq, Ollama, Mistral, etc.)
-- **Two tiers, one codebase** -- core tier has zero dependencies; add `better-sqlite3` + `sqlite-vec` for hybrid vector search
-- **Incremental** -- tracks a cursor, only processes new messages each run
-- **Smart deduplication** -- multi-level (exact match + FTS keyword overlap) prevents duplicate facts
-- **Hybrid search** -- FTS5 keyword + vector kNN merged via Reciprocal Rank Fusion
-- **URL enrichment** -- auto-fetches metadata for links (GitHub stars, page titles) before LLM extraction
-- **Pluggable sources** -- SQLite, JSONL, or write your own adapter in 10 lines
-- **Roster generation** -- compact member profiles (~30 tokens each) designed for agent context windows
+**"Who on our team knows about Kubernetes?"** -- Instead of asking around, search your memory database. Lizardbrain tracks what each member talks about and builds expertise profiles automatically.
+
+**"What did we decide about the database migration?"** -- Decisions made in chat are captured with context and participants. No more scrolling through months of messages.
+
+**"What's the status of the API rewrite?"** -- Tasks, assignments, and deadlines mentioned in chat are extracted and searchable.
+
+**"Summarize what our community knows about RAG pipelines"** -- Facts, opinions, and resources shared by members are stored with confidence scores and attribution.
 
 ---
 
-## Quick Start
+## How it works
+
+Point Lizardbrain at your chat messages (SQLite, JSONL, or any custom source). It sends batches to a cheap LLM, which extracts structured knowledge. Everything goes into SQLite with full-text search, and optionally vector search for semantic matching.
+
+```
+Messages  -->  LLM extracts knowledge  -->  SQLite + search indexes
+```
+
+You choose a **profile** that matches your group type, and Lizardbrain adjusts what it looks for:
+
+| Profile | What it extracts | Best for |
+|---------|-----------------|----------|
+| **knowledge** | Members, facts, topics | Communities, interest groups, Discord servers |
+| **team** | + decisions, tasks | Teams, workplaces, Slack channels |
+| **project** | + questions (no topics) | Client work, project groups, contractor chats |
+| **full** | All 7 entity types | When you want everything |
+
+---
+
+## Quick start
 
 ```bash
 git clone https://github.com/pandore/lizardbrain && cd lizardbrain
@@ -43,66 +49,54 @@ git clone https://github.com/pandore/lizardbrain && cd lizardbrain
 cp examples/lizardbrain.json lizardbrain.json
 # Edit lizardbrain.json -- set your chat DB path and LLM provider
 
-node src/cli.js init              # Interactive profile picker
-# or: node src/cli.js init --profile team
-
+node src/cli.js init              # Asks which profile fits your group
 LIZARDBRAIN_LLM_API_KEY=your-key node src/cli.js extract
 
-# Query
+# Now query your group's knowledge
 node src/cli.js search "RAG pipeline"
 node src/cli.js who "python"
 node src/cli.js stats
 ```
 
-**Enable hybrid vector search** (optional):
+Set it up on a cron and forget about it:
 
 ```bash
-npm install better-sqlite3 sqlite-vec
-# Add to lizardbrain.json: "embedding": { "enabled": true, "baseUrl": "...", "model": "..." }
-LIZARDBRAIN_EMBEDDING_API_KEY=your-key node src/cli.js embed --backfill
+0 */2 * * * cd /path/to/project && LIZARDBRAIN_LLM_API_KEY=key node src/cli.js extract >> /tmp/lizardbrain.log 2>&1
 ```
 
 ---
 
-## Profiles
+## What gets extracted
 
-Profiles control what entity types are extracted and how member fields are interpreted. Pick a profile at `init` time:
+Depending on your profile, Lizardbrain pulls out up to 7 types of structured knowledge:
 
-| Profile | Entities | Best for |
-|---------|----------|----------|
-| `knowledge` | Members, Facts, Topics | Communities, interest groups |
-| `team` | Members, Facts, Topics, Decisions, Tasks | Teams, workplaces |
-| `project` | Members, Facts, Decisions, Tasks, Questions | Client work, project groups |
-| `full` | All 7 entity types | When you want everything |
+| Entity | What it captures | Example |
+|--------|-----------------|---------|
+| **Members** | Who's in the chat, what they know, what they work on | Alice -- RAG, LangChain \| builds: pipeline |
+| **Facts** | Claims, insights, recommendations with confidence scores | "LangChain works well with chunk size 512" (0.9) |
+| **Topics** | Discussion threads with summaries | "RAG Pipeline Comparison" -- Alice, Bob |
+| **Decisions** | What was decided, by whom, and why | "Use PostgreSQL instead of MySQL" (agreed) |
+| **Tasks** | Action items with assignees and deadlines | "Migrate user service" -- Bob, due Apr 15 |
+| **Questions** | Questions asked and answers given | "Best way to handle migrations?" -- answered |
+| **Events** | Meetings, deadlines, gatherings | "Architecture Review" -- Apr 1, Zoom |
 
-```bash
-node src/cli.js init --profile team
-# or run without --profile for interactive picker
-```
+Everything is deduplicated automatically -- if the LLM extracts the same fact twice (even rephrased), Lizardbrain catches it.
 
-The profile is stored in the database and used automatically on subsequent `extract` runs. You can also set it in config:
+---
 
-```json
-{
-  "profile": "team"
-}
-```
+## Why Lizardbrain?
 
-<details>
-<summary>Custom entity selection</summary>
+**Use any LLM.** OpenAI, Gemini, Groq, Ollama, Mistral -- anything with an OpenAI-compatible API. Cheap models work great for extraction; you don't need a frontier model to pull facts out of chat messages.
 
-Override which entities are extracted in your config file:
+**Zero dependencies to start.** The core tier uses Node.js and the `sqlite3` CLI that's already on your machine. No `npm install` needed.
 
-```json
-{
-  "profile": "team",
-  "entities": ["members", "facts", "decisions", "tasks"]
-}
-```
+**Scales up when you want.** Add `better-sqlite3` + `sqlite-vec` for hybrid vector search that combines keyword matching with semantic similarity via Reciprocal Rank Fusion.
 
-Available entity types: `members`, `facts`, `topics`, `decisions`, `tasks`, `questions`, `events`.
+**Runs incrementally.** Tracks where it left off. Each run only processes new messages, so it's cheap and fast even on large chats.
 
-</details>
+**Links get context.** When someone shares a GitHub repo or web page, Lizardbrain fetches metadata (stars, descriptions, titles) before sending to the LLM, so extracted facts are richer.
+
+**Built for agents.** Generate a compact member roster (~30 tokens per person) designed to fit in an agent's system prompt. At 100 members, that's ~3,000 tokens.
 
 ---
 
@@ -113,19 +107,11 @@ Create `lizardbrain.json` in your working directory:
 ```json
 {
   "memoryDbPath": "./lizardbrain.db",
-  "batchSize": 40,
-  "minMessages": 5,
   "profile": "knowledge",
 
   "llm": {
     "baseUrl": "https://api.openai.com/v1",
     "model": "gpt-5-nano"
-  },
-
-  "embedding": {
-    "enabled": true,
-    "baseUrl": "https://api.openai.com/v1",
-    "model": "text-embedding-3-small"
   },
 
   "source": {
@@ -137,17 +123,16 @@ Create `lizardbrain.json` in your working directory:
       "content": "content",
       "sender": "sender_name",
       "timestamp": "created_at"
-    },
-    "filter": "role = 'user'"
+    }
   }
 }
 ```
 
 API key via `.env` file, environment variable (`LIZARDBRAIN_LLM_API_KEY`), or directly in config.
 
-### LLM Providers
+### LLM providers
 
-Any OpenAI-compatible chat completions API. Cheap/fast models work great for extraction -- you don't need a frontier model to pull facts out of chat messages.
+Any OpenAI-compatible chat completions API:
 
 | Provider | `baseUrl` | Model | Cost (input/output per 1M) |
 |----------|-----------|-------|----------------------------|
@@ -159,7 +144,7 @@ Any OpenAI-compatible chat completions API. Cheap/fast models work great for ext
 | OpenRouter | `https://openrouter.ai/api/v1` | `meta-llama/llama-4-scout` | $0.08 / $0.30 |
 
 <details>
-<summary>Embedding providers</summary>
+<summary>Embedding providers (for vector search)</summary>
 
 Works with any OpenAI-compatible `/v1/embeddings` endpoint. You can mix providers -- e.g., cheap LLM (Groq) for extraction + quality embeddings (OpenAI) for search.
 
@@ -169,17 +154,36 @@ Works with any OpenAI-compatible `/v1/embeddings` endpoint. You can mix provider
 | Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | `text-embedding-004` | 768 |
 | Ollama | `http://localhost:11434/v1` | `nomic-embed-text` | 768 |
 
+Add to your config:
+
+```json
+{
+  "embedding": {
+    "enabled": true,
+    "baseUrl": "https://api.openai.com/v1",
+    "model": "text-embedding-3-small"
+  }
+}
+```
+
+Then run:
+
+```bash
+npm install better-sqlite3 sqlite-vec
+LIZARDBRAIN_EMBEDDING_API_KEY=your-key node src/cli.js embed --backfill
+```
+
 See `examples/lizardbrain-mixed.json` for a mixed-provider config.
 
 </details>
 
 ---
 
-## Source Adapters
+## Chat sources
 
 ### SQLite (default)
 
-Point at any SQLite database with a messages table. Works with OpenClaw LCM, Telegram exports, or any custom schema.
+Point at any SQLite database with a messages table. Works with Telegram exports, custom bots, or any app that stores messages in SQLite.
 
 ```json
 {
@@ -194,7 +198,7 @@ Point at any SQLite database with a messages table. Works with OpenClaw LCM, Tel
 ```
 
 <details>
-<summary>Conversation filtering (group-only extraction)</summary>
+<summary>Group-only filtering (exclude DMs)</summary>
 
 Restrict extraction to group chats only -- prevents private messages from leaking into shared memory:
 
@@ -211,8 +215,6 @@ Restrict extraction to group chats only -- prevents private messages from leakin
 }
 ```
 
-Auto-detects group chats (>50% of messages contain the marker) and excludes DMs.
-
 </details>
 
 ### JSONL
@@ -227,7 +229,9 @@ Auto-detects group chats (>50% of messages contain the marker) and excludes DMs.
 }
 ```
 
-### Custom Adapter
+### Custom adapter
+
+Write your own in ~10 lines:
 
 ```js
 // my-adapter.js
@@ -246,16 +250,96 @@ module.exports = {
 
 ---
 
-## CLI Reference
+## Profiles in depth
+
+Profiles adapt what the LLM looks for based on the type of group:
+
+- **Knowledge** profile asks the LLM to extract skills, tools, and project involvement. Roster shows "expertise" and "builds".
+- **Team** profile asks for roles, responsibilities, and current work. Roster shows "role" and "works on". Also captures decisions and tasks.
+- **Project** profile asks for company, role, and scope of work. Roster shows "role" and "scope". Captures decisions, tasks, and questions -- but not topics (project chats tend to be focused, not multi-topic).
+
+The same database columns are reused across profiles -- only the LLM prompt changes. You can switch profiles without migrating data.
+
+<details>
+<summary>Custom entity selection</summary>
+
+Override which entities are extracted in your config file:
+
+```json
+{
+  "profile": "team",
+  "entities": ["members", "facts", "decisions", "tasks"]
+}
+```
+
+Available entity types: `members`, `facts`, `topics`, `decisions`, `tasks`, `questions`, `events`.
+
+</details>
+
+<details>
+<summary>Confidence scores</summary>
+
+Facts are tagged with confidence scores to distinguish verified information from opinions and hearsay:
+
+| Score | Meaning | Example |
+|-------|---------|---------|
+| 0.9+ | Verified specifics | "Claude Opus costs $15/M output tokens" |
+| 0.75-0.89 | Opinions, experiences | "LlamaIndex works better for large PDFs" |
+| 0.5-0.74 | Secondhand, speculation | "I heard they might release a new model" |
+
+</details>
+
+---
+
+## Programmatic API
+
+```js
+const lizardbrain = require('lizardbrain');
+
+// Initialize with a profile
+lizardbrain.init('./memory.db', { profile: 'team' });
+
+// Connect to your chat source
+const adapter = lizardbrain.adapters.sqlite.create({
+  path: './chat.db',
+  table: 'messages',
+  columns: { id: 'id', content: 'text', sender: 'author', timestamp: 'created_at' },
+});
+const driver = lizardbrain.createDriver('./memory.db');
+
+// Extract knowledge
+await lizardbrain.extract(adapter, driver, {
+  llm: { baseUrl: 'https://api.openai.com/v1', apiKey: process.env.OPENAI_API_KEY, model: 'gpt-5-nano' },
+});
+
+// Search (hybrid FTS5 + vector, or FTS5-only fallback)
+const { mode, results } = await lizardbrain.search(driver, 'kubernetes', { limit: 5 });
+
+// Query helpers
+const facts = lizardbrain.query.searchFacts(driver, 'kubernetes');
+const experts = lizardbrain.query.whoKnows(driver, 'python');
+const decisions = lizardbrain.query.searchDecisions(driver, 'database');
+const tasks = lizardbrain.query.searchTasks(driver, 'migration');
+
+// Generate a compact roster for agent context windows
+const roster = lizardbrain.query.generateRoster(driver);
+// roster.content is ~30 tokens per member, ready for a system prompt
+
+driver.close();
+```
+
+---
+
+## CLI reference
 
 ```
 lizardbrain init [--force] [--profile <name>]       Create memory database
 lizardbrain extract [--dry-run] [--reprocess]       Run extraction pipeline
 lizardbrain embed [--stats] [--rebuild]             Manage vector embeddings
 lizardbrain stats                                   Show database statistics
-lizardbrain search <query> [--json] [--fts-only]    Search knowledge (hybrid or FTS5)
+lizardbrain search <query> [--json] [--fts-only]    Search knowledge
 lizardbrain who <keyword>                           Find members by expertise
-lizardbrain roster [--output path]                  Generate compact member roster
+lizardbrain roster [--output path]                  Generate member roster
 ```
 
 | Flag | Description |
@@ -266,7 +350,8 @@ lizardbrain roster [--output path]                  Generate compact member rost
 | `--no-enrich` | Skip URL metadata enrichment |
 | `--no-embed` | Skip auto-embedding after extraction |
 
-### Environment Variables
+<details>
+<summary>Environment variables</summary>
 
 | Variable | Description |
 |----------|-------------|
@@ -279,131 +364,18 @@ lizardbrain roster [--output path]                  Generate compact member rost
 | `LIZARDBRAIN_DB_PATH` | Path to memory database |
 | `LIZARDBRAIN_PROFILE` | Extraction profile |
 
----
-
-## Programmatic API
-
-```js
-const lizardbrain = require('lizardbrain');
-
-lizardbrain.init('./memory.db', { profile: 'team' });
-
-const adapter = lizardbrain.adapters.sqlite.create({
-  path: './chat.db',
-  table: 'messages',
-  columns: { id: 'id', content: 'text', sender: 'author', timestamp: 'created_at' },
-});
-const driver = lizardbrain.createDriver('./memory.db');
-
-await lizardbrain.extract(adapter, driver, {
-  llm: { baseUrl: 'https://api.openai.com/v1', apiKey: process.env.OPENAI_API_KEY, model: 'gpt-5-nano' },
-});
-
-// Hybrid search (auto-falls back to FTS5 if vectors unavailable)
-const { mode, results } = await lizardbrain.search(driver, 'kubernetes', { limit: 5 });
-
-// Query helpers
-const facts = lizardbrain.query.searchFacts(driver, 'kubernetes');
-const experts = lizardbrain.query.whoKnows(driver, 'python');
-const decisions = lizardbrain.query.searchDecisions(driver, 'database');
-const tasks = lizardbrain.query.searchTasks(driver, 'migration');
-
-driver.close();
-```
-
----
-
-## How It Works
-
-### Extraction Pipeline
-
-1. **Adapter** reads new messages after the last cursor position
-2. **URL enricher** fetches metadata for links (GitHub repos get description + stars, web pages get title + og:description)
-3. **LLM** extracts structured knowledge as JSON -- members, facts, topics -- with confidence scores
-4. **Store** deduplicates and writes to SQLite with auto-synced FTS5 indexes
-5. **Embedder** (optional) generates vectors for hybrid search
-
-Designed to run on a cron every 1-2 hours:
-
-```bash
-0 */2 * * * cd /path/to/project && LIZARDBRAIN_LLM_API_KEY=key node src/cli.js extract >> /tmp/lizardbrain.log 2>&1
-```
-
-### What Gets Extracted
-
-| Entity | Fields | Example |
-|--------|--------|---------|
-| **Members** | username, expertise, projects | Alice -- RAG, LangChain \| builds: pipeline |
-| **Facts** | category, content, confidence, tags | "LangChain works well with chunk size 512" (0.9) |
-| **Topics** | name, summary, participants | "RAG Pipeline Comparison" -- Alice, Bob |
-| **Decisions** | description, participants, context, status | "Use PostgreSQL instead of MySQL" (agreed) |
-| **Tasks** | description, assignee, deadline, status | "Migrate user service" -- Bob, due Apr 15 |
-| **Questions** | question, asker, answer, status | "Best way to handle migrations?" -- answered |
-| **Events** | name, date, location, attendees | "Architecture Review" -- Apr 1, Zoom |
-
-### Confidence Scores
-
-| Score | Meaning | Example |
-|-------|---------|---------|
-| 0.9+ | Verified specifics | "Claude Opus costs $15/M output tokens" |
-| 0.75-0.89 | Opinions, experiences | "LlamaIndex works better for large PDFs" |
-| 0.5-0.74 | Secondhand, speculation | "I heard they might release a new model" |
-
-### Roster Generation
-
-Generate a compact member roster for agent context windows (~30-50 tokens per member):
-
-```
-# Members
-
-- **Alice** -- RAG, LangChain, Python | builds: pipeline, search-tool
-- **Bob** -- LlamaIndex, embeddings | builds: pdf-processor
-```
-
-At 100 members it's ~3,000 tokens -- cheap enough to always include in an agent's system prompt. Customize the header via the `title` option in the programmatic API.
-
-```bash
-lizardbrain roster --output ./MEMBERS.md
-```
-
----
-
-## Database Schema
-
-| Table | Contents |
-|-------|----------|
-| `members` | username, display_name, expertise, projects, first/last seen |
-| `facts` | category, content, source member, tags, confidence, date |
-| `topics` | name, summary, participants, tags, date |
-| `decisions` | description, participants, context, status, tags, date |
-| `tasks` | description, assignee, deadline, status, source member, tags |
-| `questions` | question, asker, answer, answered_by, status, tags |
-| `events` | name, description, event_date, location, attendees, tags |
-| `extraction_state` | cursor position, run counters |
-| `lizardbrain_meta` | key-value store (profile, embedding model, dimensions) |
-| `*_fts` | FTS5 full-text search indexes (auto-synced via triggers) |
-| `*_vec` | vec0 vector tables for kNN search (created on first embed) |
-
-Query directly:
-
-```bash
-sqlite3 -json lizardbrain.db "SELECT * FROM facts_fts WHERE facts_fts MATCH 'docker'"
-sqlite3 -json lizardbrain.db "SELECT display_name, expertise FROM members WHERE expertise LIKE '%python%'"
-```
+</details>
 
 ---
 
 ## Requirements
 
-| Tier | Dependencies |
-|------|-------------|
-| **Core** (zero deps) | Node.js >= 18, `sqlite3` CLI with FTS5 (included on macOS/Linux) |
-| **Vector** (optional) | + `better-sqlite3` + `sqlite-vec` + any embedding API |
+| Tier | What you need |
+|------|--------------|
+| **Core** (zero deps) | Node.js >= 18 and `sqlite3` CLI (already on macOS/Linux) |
+| **Vector** (optional) | + `npm install better-sqlite3 sqlite-vec` + any embedding API |
 
-```bash
-# Enable vector tier
-npm install better-sqlite3 sqlite-vec
-```
+---
 
 ## License
 
