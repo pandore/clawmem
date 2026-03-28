@@ -91,7 +91,7 @@ class CliDriver {
       return { changes: -1 };
     } catch (err) {
       console.error(`[clawmem:driver:cli] write error: ${err.stderr?.toString() || err.message}`);
-      return { changes: -1 };
+      return { changes: 0 };
     }
   }
 
@@ -137,6 +137,8 @@ class BetterSqliteDriver {
       transactions: true,
     };
 
+    // Semi-public: used by embeddings.js and search.js for vec0 operations
+    // that require typed arrays (Float32Array) not supported by the generic interface.
     this._db = db;
   }
 

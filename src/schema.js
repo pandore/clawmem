@@ -125,7 +125,7 @@ INSERT OR IGNORE INTO extraction_state (id) VALUES (1);
 CREATE TABLE IF NOT EXISTS clawmem_meta (
   key TEXT PRIMARY KEY,
   value TEXT,
-  updated_at TEXT
+  updated_at TEXT DEFAULT (datetime('now'))
 );
 `;
 

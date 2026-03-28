@@ -289,13 +289,15 @@ async function backfill(driver, config, options = {}) {
 
       for (const batch of batches) {
         const result = await embedWithRetry(batch, config);
-        const insertStmt = driver._db.prepare(
-          'INSERT OR REPLACE INTO facts_vec (fact_id, embedding) VALUES (?, ?)'
-        );
-        for (let i = 0; i < batch.length; i++) {
-          const row = rows[offset + i];
-          insertStmt.run(row.id, new Float32Array(result.embeddings[i]));
-        }
+        driver.transaction(() => {
+          const insertStmt = driver._db.prepare(
+            'INSERT OR REPLACE INTO facts_vec (fact_id, embedding) VALUES (?, ?)'
+          );
+          for (let i = 0; i < batch.length; i++) {
+            const row = rows[offset + i];
+            insertStmt.run(row.id, new Float32Array(result.embeddings[i]));
+          }
+        });
         offset += batch.length;
         totalEmbedded += batch.length;
       }
@@ -317,13 +319,15 @@ async function backfill(driver, config, options = {}) {
 
       for (const batch of batches) {
         const result = await embedWithRetry(batch, config);
-        const insertStmt = driver._db.prepare(
-          'INSERT OR REPLACE INTO topics_vec (topic_id, embedding) VALUES (?, ?)'
-        );
-        for (let i = 0; i < batch.length; i++) {
-          const row = rows[offset + i];
-          insertStmt.run(row.id, new Float32Array(result.embeddings[i]));
-        }
+        driver.transaction(() => {
+          const insertStmt = driver._db.prepare(
+            'INSERT OR REPLACE INTO topics_vec (topic_id, embedding) VALUES (?, ?)'
+          );
+          for (let i = 0; i < batch.length; i++) {
+            const row = rows[offset + i];
+            insertStmt.run(row.id, new Float32Array(result.embeddings[i]));
+          }
+        });
         offset += batch.length;
         totalEmbedded += batch.length;
       }
@@ -347,13 +351,15 @@ async function backfill(driver, config, options = {}) {
 
       for (const batch of batches) {
         const result = await embedWithRetry(batch, config);
-        const insertStmt = driver._db.prepare(
-          'INSERT OR REPLACE INTO members_vec (member_id, embedding) VALUES (?, ?)'
-        );
-        for (let i = 0; i < batch.length; i++) {
-          const row = rows[offset + i];
-          insertStmt.run(row.id, new Float32Array(result.embeddings[i]));
-        }
+        driver.transaction(() => {
+          const insertStmt = driver._db.prepare(
+            'INSERT OR REPLACE INTO members_vec (member_id, embedding) VALUES (?, ?)'
+          );
+          for (let i = 0; i < batch.length; i++) {
+            const row = rows[offset + i];
+            insertStmt.run(row.id, new Float32Array(result.embeddings[i]));
+          }
+        });
         offset += batch.length;
         totalEmbedded += batch.length;
       }

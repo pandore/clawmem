@@ -263,8 +263,8 @@ async function search(driver, query, options = {}) {
       });
 
       return { mode: 'hybrid', results };
-    } catch (_) {
-      // Embedding failed — fall through to FTS-only
+    } catch (err) {
+      console.error(`[clawmem:search] Hybrid search failed, falling back to FTS5: ${err.message}`);
     }
   }
 
