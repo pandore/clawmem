@@ -116,7 +116,8 @@ CREATE TABLE IF NOT EXISTS decisions (
   status TEXT DEFAULT 'proposed',
   tags TEXT DEFAULT '',
   message_date TEXT,
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT
 );
 
 -- Tasks: action items and assignments
@@ -129,7 +130,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   source_member_id INTEGER REFERENCES members(id),
   tags TEXT DEFAULT '',
   message_date TEXT,
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT
 );
 
 -- Questions: asked and answered
@@ -142,7 +144,8 @@ CREATE TABLE IF NOT EXISTS questions (
   status TEXT DEFAULT 'open',
   tags TEXT DEFAULT '',
   message_date TEXT,
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT
 );
 
 -- Events: meetings, deadlines, gatherings
@@ -254,6 +257,7 @@ CREATE TABLE IF NOT EXISTS extraction_state (
   total_tasks_extracted INTEGER DEFAULT 0,
   total_questions_extracted INTEGER DEFAULT 0,
   total_events_extracted INTEGER DEFAULT 0,
+  total_updates_applied INTEGER DEFAULT 0,
   total_members_seen INTEGER DEFAULT 0,
   last_run_at TEXT,
   created_at TEXT DEFAULT (datetime('now'))
@@ -289,7 +293,7 @@ function init(dbPath, { force = false, profile = 'knowledge' } = {}) {
   const { esc } = require('./driver');
   driver.write(`INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('profile_name', '${esc(profile)}', datetime('now'));`);
   driver.write(`INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('profile_entities', '${esc(profileConfig.entities.join(','))}', datetime('now'));`);
-  driver.write(`INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('schema_version', '0.4', datetime('now'));`);
+  driver.write(`INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('schema_version', '0.5', datetime('now'));`);
 
   driver.close();
 
@@ -306,7 +310,7 @@ function migrate(driver) {
   // Check current schema version
   const meta = driver.read("SELECT value FROM lizardbrain_meta WHERE key = 'schema_version'");
   const version = meta[0]?.value;
-  if (version >= '0.4') return { migrated: false, message: 'Already at v0.4' };
+  if (version >= '0.5') return { migrated: false, message: 'Already at v0.5' };
 
   // Create new tables (IF NOT EXISTS makes this idempotent)
   const newTables = `
@@ -407,10 +411,20 @@ function migrate(driver) {
     driver.write("INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('profile_entities', 'members,facts,topics', datetime('now'));");
   }
 
-  // Set schema version
+  // Set schema version to v0.4
   driver.write("INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('schema_version', '0.4', datetime('now'));");
 
-  return { migrated: true, message: 'Migrated to v0.4 schema' };
+  // v0.5 migration: add updated_at to updateable tables, add updates counter
+  for (const table of ['decisions', 'tasks', 'questions']) {
+    try { driver.write(`ALTER TABLE ${table} ADD COLUMN updated_at TEXT;`); }
+    catch (e) { /* column already exists */ }
+  }
+  try { driver.write('ALTER TABLE extraction_state ADD COLUMN total_updates_applied INTEGER DEFAULT 0;'); }
+  catch (e) { /* column already exists */ }
+
+  driver.write("INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('schema_version', '0.5', datetime('now'));");
+
+  return { migrated: true, message: 'Migrated to v0.5 schema' };
 }
 
 module.exports = { init, migrate, SCHEMA_SQL };

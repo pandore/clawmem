@@ -272,6 +272,122 @@ function insertEvent(driver, event, messageDate) {
   return true;
 }
 
+// --- Entity update functions ---
+
+function updateDecisionStatus(driver, id, status, context) {
+  const existing = driver.read(`SELECT id FROM decisions WHERE id = ${parseInt(id)}`);
+  if (existing.length === 0) return false;
+  if (!['proposed', 'agreed', 'revisited'].includes(status)) return false;
+  let sql = `UPDATE decisions SET status = '${esc(status)}', updated_at = datetime('now')`;
+  if (context) sql += `, context = '${esc(context)}'`;
+  sql += ` WHERE id = ${parseInt(id)};`;
+  driver.write(sql);
+  return true;
+}
+
+function updateTaskStatus(driver, id, status) {
+  const existing = driver.read(`SELECT id FROM tasks WHERE id = ${parseInt(id)}`);
+  if (existing.length === 0) return false;
+  if (!['open', 'done', 'blocked'].includes(status)) return false;
+  driver.write(`UPDATE tasks SET status = '${esc(status)}', updated_at = datetime('now') WHERE id = ${parseInt(id)};`);
+  return true;
+}
+
+function updateQuestionAnswer(driver, id, answer, answeredBy) {
+  const existing = driver.read(`SELECT id FROM questions WHERE id = ${parseInt(id)}`);
+  if (existing.length === 0) return false;
+  driver.write(`UPDATE questions SET answer = '${esc(answer)}', answered_by = '${esc(answeredBy || '')}', status = 'answered', updated_at = datetime('now') WHERE id = ${parseInt(id)};`);
+  return true;
+}
+
+// --- Context query helpers ---
+
+function getActiveContext(driver, profileConfig, options = {}) {
+  const { recencyDays = 30, maxItems = {} } = options;
+  const entities = profileConfig.entities;
+  const context = {};
+
+  if (entities.includes('decisions')) {
+    const limit = maxItems.decisions || 5;
+    context.decisions = driver.read(
+      `SELECT id, description, status, context FROM decisions WHERE status IN ('proposed', 'agreed') ORDER BY created_at DESC LIMIT ${limit}`
+    );
+  }
+
+  if (entities.includes('tasks')) {
+    const limit = maxItems.tasks || 10;
+    context.tasks = driver.read(
+      `SELECT id, description, assignee, status FROM tasks WHERE status IN ('open', 'blocked') ORDER BY created_at DESC LIMIT ${limit}`
+    );
+  }
+
+  if (entities.includes('questions')) {
+    const limit = maxItems.questions || 5;
+    context.questions = driver.read(
+      `SELECT id, question, asker, status FROM questions WHERE status = 'open' ORDER BY created_at DESC LIMIT ${limit}`
+    );
+  }
+
+  if (entities.includes('facts')) {
+    const limit = maxItems.facts || 5;
+    context.facts = driver.read(
+      `SELECT id, content, confidence FROM facts WHERE created_at >= datetime('now', '-${recencyDays} days') ORDER BY confidence DESC, created_at DESC LIMIT ${limit}`
+    );
+  }
+
+  if (entities.includes('topics')) {
+    const limit = maxItems.topics || 3;
+    context.topics = driver.read(
+      `SELECT id, name FROM topics WHERE created_at >= datetime('now', '-${recencyDays} days') ORDER BY created_at DESC LIMIT ${limit}`
+    );
+  }
+
+  return context;
+}
+
+function formatContext(context, tokenBudget = 500) {
+  const lines = [];
+
+  if (context.topics?.length) {
+    lines.push('Recent topics: ' + context.topics.map(t => t.name).join(', '));
+  }
+  if (context.decisions?.length) {
+    lines.push('Open decisions:');
+    for (const d of context.decisions) {
+      lines.push(`  [id:${d.id}] ${d.description} -- status: ${d.status}`);
+    }
+  }
+  if (context.tasks?.length) {
+    lines.push('Open tasks:');
+    for (const t of context.tasks) {
+      lines.push(`  [id:${t.id}] ${t.description} -- ${t.assignee || 'unassigned'}, ${t.status}`);
+    }
+  }
+  if (context.questions?.length) {
+    lines.push('Unanswered questions:');
+    for (const q of context.questions) {
+      lines.push(`  [id:${q.id}] ${q.question} (asked by ${q.asker})`);
+    }
+  }
+  if (context.facts?.length) {
+    lines.push('Recent facts:');
+    for (const f of context.facts) {
+      lines.push(`  [id:${f.id}] ${f.content} (${f.confidence})`);
+    }
+  }
+
+  if (lines.length === 0) return '';
+
+  // Token budget enforcement: rough estimate (1 token ~ 4 chars)
+  let text = lines.join('\n');
+  while (Math.ceil(text.length / 4) > tokenBudget && lines.length > 1) {
+    lines.pop();
+    text = lines.join('\n');
+  }
+
+  return text;
+}
+
 function processExtraction(driver, extracted, messageDate) {
   let totalFacts = 0, totalTopics = 0, totalMembers = 0;
   let totalDecisions = 0, totalTasks = 0, totalQuestions = 0, totalEvents = 0;
@@ -346,7 +462,30 @@ function processExtraction(driver, extracted, messageDate) {
     }
   }
 
-  return { totalFacts, totalTopics, totalMembers, totalDecisions, totalTasks, totalQuestions, totalEvents };
+  // Process updates for existing entities
+  let totalUpdated = 0;
+  if (extracted.updates) {
+    if (Array.isArray(extracted.updates.decisions)) {
+      for (const upd of extracted.updates.decisions) {
+        if (upd.id && upd.status && updateDecisionStatus(driver, upd.id, upd.status, upd.context))
+          totalUpdated++;
+      }
+    }
+    if (Array.isArray(extracted.updates.tasks)) {
+      for (const upd of extracted.updates.tasks) {
+        if (upd.id && upd.status && updateTaskStatus(driver, upd.id, upd.status))
+          totalUpdated++;
+      }
+    }
+    if (Array.isArray(extracted.updates.questions)) {
+      for (const upd of extracted.updates.questions) {
+        if (upd.id && upd.answer && updateQuestionAnswer(driver, upd.id, upd.answer, upd.answered_by))
+          totalUpdated++;
+      }
+    }
+  }
+
+  return { totalFacts, totalTopics, totalMembers, totalDecisions, totalTasks, totalQuestions, totalEvents, totalUpdated };
 }
 
 function getState(driver) {
@@ -355,7 +494,7 @@ function getState(driver) {
 }
 
 function updateState(driver, { lastProcessedId, messagesProcessed, factsExtracted, topicsExtracted,
-  decisionsExtracted = 0, tasksExtracted = 0, questionsExtracted = 0, eventsExtracted = 0 }) {
+  decisionsExtracted = 0, tasksExtracted = 0, questionsExtracted = 0, eventsExtracted = 0, updatesApplied = 0 }) {
   driver.write(`
     UPDATE extraction_state SET
       last_processed_id = '${esc(String(lastProcessedId))}',
@@ -366,6 +505,7 @@ function updateState(driver, { lastProcessedId, messagesProcessed, factsExtracte
       total_tasks_extracted = total_tasks_extracted + ${tasksExtracted},
       total_questions_extracted = total_questions_extracted + ${questionsExtracted},
       total_events_extracted = total_events_extracted + ${eventsExtracted},
+      total_updates_applied = total_updates_applied + ${updatesApplied},
       total_members_seen = (SELECT COUNT(*) FROM members),
       last_run_at = datetime('now')
     WHERE id = 1;
@@ -490,4 +630,9 @@ module.exports = {
   searchEvents,
   whoKnows,
   generateRoster,
+  updateDecisionStatus,
+  updateTaskStatus,
+  updateQuestionAnswer,
+  getActiveContext,
+  formatContext,
 };

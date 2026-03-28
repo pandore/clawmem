@@ -56,8 +56,24 @@ Fact rules:
 
 If no meaningful content found, return empty arrays`;
 
-function buildPrompt(formattedMessages, profileConfig) {
+function buildUpdateSchema(entities) {
+  const updateFragments = [];
+  if (entities.includes('decisions')) {
+    updateFragments.push('    "decisions": [{ "id": "number (from EXISTING KNOWLEDGE)", "status": "proposed|agreed|revisited", "context": "optional new context" }]');
+  }
+  if (entities.includes('tasks')) {
+    updateFragments.push('    "tasks": [{ "id": "number (from EXISTING KNOWLEDGE)", "status": "open|done|blocked" }]');
+  }
+  if (entities.includes('questions')) {
+    updateFragments.push('    "questions": [{ "id": "number (from EXISTING KNOWLEDGE)", "answer": "the answer", "answered_by": "display_name", "status": "answered" }]');
+  }
+  if (updateFragments.length === 0) return '';
+  return `  "updates": {\n${updateFragments.join(',\n')}\n  }`;
+}
+
+function buildPrompt(formattedMessages, profileConfig, options = {}) {
   const { entities, factCategories, memberLabels } = profileConfig;
+  const { overlapMessages, contextSection } = options;
 
   // Build JSON schema with only enabled entities
   const schemaFragments = [];
@@ -71,6 +87,12 @@ function buildPrompt(formattedMessages, profileConfig) {
     } else {
       schemaFragments.push(def.promptFragment());
     }
+  }
+
+  // Add update schema if context is present
+  if (contextSection) {
+    const updateSchema = buildUpdateSchema(entities);
+    if (updateSchema) schemaFragments.push(updateSchema);
   }
 
   // Build rules with only enabled entities
@@ -87,8 +109,26 @@ function buildPrompt(formattedMessages, profileConfig) {
     }
   }
 
-  return `Analyze these chat messages and extract structured knowledge.
+  // Add update rules if context is present
+  if (contextSection) {
+    rulesFragments.push(`Update rules:
+- ONLY reference IDs from the EXISTING KNOWLEDGE section above
+- Only update status when the conversation EXPLICITLY confirms a change (e.g., "we agreed on X", "task Y is done", "the answer to Z is...")
+- Do not update entities that are not mentioned in the current messages
+- If unsure whether something is an update or a new entity, create a new entity`);
+  }
 
+  // Build context blocks
+  let contextBlock = '';
+  if (overlapMessages) {
+    contextBlock += `\nPREVIOUS MESSAGES (context only — do NOT extract from these, they were already processed):\n${overlapMessages}\n`;
+  }
+  if (contextSection) {
+    contextBlock += `\nEXISTING KNOWLEDGE (from previous extractions — update these if the conversation references changes):\n${contextSection}\n`;
+  }
+
+  return `Analyze these chat messages and extract structured knowledge.
+${contextBlock}
 MESSAGES:
 ${formattedMessages}
 
@@ -122,6 +162,8 @@ async function extract(messages, config) {
     model,
     promptTemplate,
     profileConfig,
+    overlapMessages,
+    contextSection,
   } = config;
 
   if (!apiKey) throw new Error('LLM API key not configured');
@@ -133,7 +175,10 @@ async function extract(messages, config) {
   if (promptTemplate) {
     prompt = promptTemplate.replace('{messages}', formatted);
   } else if (profileConfig) {
-    prompt = buildPrompt(formatted, profileConfig);
+    prompt = buildPrompt(formatted, profileConfig, {
+      overlapMessages: overlapMessages || null,
+      contextSection: contextSection || null,
+    });
   } else {
     prompt = EXTRACTION_PROMPT.replace('{messages}', formatted);
   }
@@ -186,4 +231,4 @@ async function extract(messages, config) {
   return JSON.parse(content);
 }
 
-module.exports = { extract, buildPrompt, EXTRACTION_PROMPT };
+module.exports = { extract, buildPrompt, formatMessages, EXTRACTION_PROMPT };

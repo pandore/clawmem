@@ -12,7 +12,7 @@ const lizardbrain = require('../src/index');
 const store = require('../src/store');
 const { createDriver, esc } = require('../src/driver');
 const profiles = require('../src/profiles');
-const { buildPrompt } = require('../src/llm');
+const { buildPrompt, formatMessages } = require('../src/llm');
 const { migrate } = require('../src/schema');
 
 const TEST_DIR = path.join(__dirname, '.test-data');
@@ -712,7 +712,7 @@ function testMigration() {
 
   // Verify schema version set
   const version = driver.read("SELECT value FROM lizardbrain_meta WHERE key = 'schema_version'");
-  assert(version[0]?.value === '0.4', 'Schema version set to 0.4');
+  assert(version[0]?.value === '0.5', 'Schema version set to 0.5');
 
   // Idempotent: running again should be a no-op
   const result2 = migrate(driver);
@@ -732,6 +732,327 @@ async function testNewEntityFtsSearch() {
   const sources = res.results.map(r => r.source);
   assert(sources.includes('decision') || sources.includes('task'), 'Search finds new entity types');
   memDriver.close();
+}
+
+function testBatchOverlap() {
+  console.log('\n--- Test: batch overlap ---');
+
+  // Create 15 messages
+  const messages = Array.from({ length: 15 }, (_, i) => ({
+    id: String(i + 1), sender: 'User', content: `Message ${i + 1}`, timestamp: '2026-03-28'
+  }));
+
+  const batchSize = 10;
+  const overlap = 3;
+  const step = batchSize - overlap;
+  const batches = [];
+  const batchMetas = [];
+  for (let i = 0; i < messages.length; i += step) {
+    batches.push(messages.slice(i, i + batchSize));
+    batchMetas.push({ overlapCount: (i === 0) ? 0 : overlap });
+  }
+
+  // 15 messages, step=7: batch1=[0..9](10), batch2=[7..14](8), batch3=[14](1)
+  assert(batches.length === 3, `Created ${batches.length} batches (expected 3)`);
+  assert(batches[0].length === 10, `Batch 1 has ${batches[0].length} messages (expected 10)`);
+  assert(batches[1].length === 8, `Batch 2 has ${batches[1].length} messages (expected 8)`);
+  assert(batches[2].length === 1, `Batch 3 has ${batches[2].length} messages (expected 1)`);
+  assert(batchMetas[0].overlapCount === 0, 'First batch has no overlap');
+  assert(batchMetas[1].overlapCount === 3, 'Second batch has 3 overlap');
+
+  // Overlap: last 3 of batch 1 = first 3 of batch 2
+  assert(batches[0][7].id === batches[1][0].id, 'Overlap: batch1[7] === batch2[0]');
+  assert(batches[0][8].id === batches[1][1].id, 'Overlap: batch1[8] === batch2[1]');
+  assert(batches[0][9].id === batches[1][2].id, 'Overlap: batch1[9] === batch2[2]');
+
+  // No overlap = standard batching
+  const noOverlapBatches = [];
+  for (let i = 0; i < messages.length; i += batchSize) {
+    noOverlapBatches.push(messages.slice(i, i + batchSize));
+  }
+  assert(noOverlapBatches.length === 2, `No overlap: ${noOverlapBatches.length} batches (expected 2)`);
+  assert(noOverlapBatches[0].length === 10, 'No overlap: batch 1 has 10 messages');
+  assert(noOverlapBatches[1].length === 5, 'No overlap: batch 2 has 5 messages');
+}
+
+function testEntityUpdates() {
+  console.log('\n--- Test: entity updates ---');
+
+  const memDriver = createDriver(MEMORY_DB);
+  migrate(memDriver);
+
+  // Insert entities to update
+  store.processExtraction(memDriver, {
+    members: [], facts: [], topics: [],
+    decisions: [{ description: 'Use Redis for caching layer', participants: 'Alice', context: 'Performance improvement', status: 'proposed', tags: 'redis' }],
+    tasks: [{ description: 'Set up Redis cluster', assignee: 'Bob', status: 'open', tags: 'redis' }],
+    questions: [{ question: 'Which Redis deployment model?', asker: 'Charlie', status: 'open', tags: 'redis' }],
+    events: [],
+  }, '2026-03-28');
+
+  // Get IDs
+  const decisions = store.searchDecisions(memDriver, 'Redis');
+  const tasks = store.searchTasks(memDriver, 'Redis');
+  const questions = store.searchQuestions(memDriver, 'Redis');
+
+  assert(decisions.length >= 1, 'Decision inserted for update test');
+  assert(tasks.length >= 1, 'Task inserted for update test');
+  assert(questions.length >= 1, 'Question inserted for update test');
+
+  const decisionId = decisions[0].id;
+  const taskId = tasks[0].id;
+  const questionId = questions[0].id;
+
+  // Test updateDecisionStatus
+  const d1 = store.updateDecisionStatus(memDriver, decisionId, 'agreed', 'Team confirmed in standup');
+  assert(d1 === true, 'updateDecisionStatus returns true');
+  const updatedDecision = memDriver.read(`SELECT status, context FROM decisions WHERE id = ${decisionId}`);
+  assert(updatedDecision[0].status === 'agreed', 'Decision status updated to agreed');
+  assert(updatedDecision[0].context.includes('standup'), 'Decision context updated');
+
+  // Test updateTaskStatus
+  const t1 = store.updateTaskStatus(memDriver, taskId, 'done');
+  assert(t1 === true, 'updateTaskStatus returns true');
+  const updatedTask = memDriver.read(`SELECT status FROM tasks WHERE id = ${taskId}`);
+  assert(updatedTask[0].status === 'done', 'Task status updated to done');
+
+  // Test updateQuestionAnswer
+  const q1 = store.updateQuestionAnswer(memDriver, questionId, 'Use Redis Sentinel', 'Alice');
+  assert(q1 === true, 'updateQuestionAnswer returns true');
+  const updatedQ = memDriver.read(`SELECT answer, answered_by, status FROM questions WHERE id = ${questionId}`);
+  assert(updatedQ[0].status === 'answered', 'Question status updated to answered');
+  assert(updatedQ[0].answer === 'Use Redis Sentinel', 'Question answer set');
+  assert(updatedQ[0].answered_by === 'Alice', 'Question answered_by set');
+
+  // Test invalid updates
+  assert(store.updateDecisionStatus(memDriver, 99999, 'agreed') === false, 'Update nonexistent decision returns false');
+  assert(store.updateDecisionStatus(memDriver, decisionId, 'invalid_status') === false, 'Invalid status returns false');
+  assert(store.updateTaskStatus(memDriver, 99999, 'done') === false, 'Update nonexistent task returns false');
+  assert(store.updateTaskStatus(memDriver, taskId, 'invalid') === false, 'Invalid task status returns false');
+  assert(store.updateQuestionAnswer(memDriver, 99999, 'answer') === false, 'Update nonexistent question returns false');
+
+  memDriver.close();
+}
+
+function testProcessExtractionUpdates() {
+  console.log('\n--- Test: processExtraction with updates ---');
+
+  const memDriver = createDriver(MEMORY_DB);
+  migrate(memDriver);
+
+  // Insert entities first
+  store.processExtraction(memDriver, {
+    members: [], facts: [], topics: [],
+    decisions: [{ description: 'Switch to GraphQL API', participants: 'Dev team', context: 'REST getting unwieldy', status: 'proposed', tags: 'api' }],
+    tasks: [{ description: 'Write GraphQL schema', assignee: 'Dave', status: 'open', tags: 'graphql' }],
+    questions: [{ question: 'Which GraphQL library to use?', asker: 'Eve', status: 'open', tags: 'graphql' }],
+    events: [],
+  }, '2026-03-28');
+
+  const decisionId = store.searchDecisions(memDriver, 'GraphQL')[0].id;
+  const taskId = store.searchTasks(memDriver, 'GraphQL')[0].id;
+  const questionId = store.searchQuestions(memDriver, 'GraphQL')[0].id;
+
+  // Now process extraction with updates key
+  const result = store.processExtraction(memDriver, {
+    members: [], facts: [], topics: [],
+    decisions: [], tasks: [], questions: [], events: [],
+    updates: {
+      decisions: [{ id: decisionId, status: 'agreed', context: 'Approved in architecture review' }],
+      tasks: [{ id: taskId, status: 'done' }],
+      questions: [{ id: questionId, answer: 'Use Apollo Server', answered_by: 'Frank' }],
+    },
+  }, '2026-03-29');
+
+  assert(result.totalUpdated === 3, `processExtraction applied ${result.totalUpdated} updates (expected 3)`);
+
+  // Verify updates persisted
+  const dec = memDriver.read(`SELECT status, context FROM decisions WHERE id = ${decisionId}`);
+  assert(dec[0].status === 'agreed', 'Decision updated via processExtraction');
+  const task = memDriver.read(`SELECT status FROM tasks WHERE id = ${taskId}`);
+  assert(task[0].status === 'done', 'Task updated via processExtraction');
+  const q = memDriver.read(`SELECT status, answer FROM questions WHERE id = ${questionId}`);
+  assert(q[0].status === 'answered', 'Question updated via processExtraction');
+  assert(q[0].answer === 'Use Apollo Server', 'Question answer set via processExtraction');
+
+  // Invalid updates should be silently skipped
+  const result2 = store.processExtraction(memDriver, {
+    members: [], facts: [], topics: [],
+    decisions: [], tasks: [], questions: [], events: [],
+    updates: {
+      decisions: [{ id: 99999, status: 'agreed' }],
+      tasks: [{ id: 99999, status: 'done' }],
+    },
+  }, '2026-03-29');
+  assert(result2.totalUpdated === 0, 'Invalid update IDs silently skipped');
+
+  memDriver.close();
+}
+
+function testContextQuery() {
+  console.log('\n--- Test: context query ---');
+
+  const memDriver = createDriver(MEMORY_DB);
+  migrate(memDriver);
+
+  // Insert some active entities
+  store.processExtraction(memDriver, {
+    members: [{ display_name: 'Tester', username: 'tester', expertise: 'testing', projects: 'qa' }],
+    facts: [{ category: 'tool', content: 'Vitest is faster than Jest for unit tests', source_member: 'Tester', tags: 'testing', confidence: 0.9 }],
+    topics: [{ name: 'Testing Framework Migration', summary: 'Moving from Jest to Vitest', participants: 'Tester', tags: 'testing' }],
+    decisions: [{ description: 'Adopt Vitest for all new tests', participants: 'Tester', context: 'Speed improvement', status: 'proposed', tags: 'testing' }],
+    tasks: [{ description: 'Migrate existing Jest tests to Vitest', assignee: 'Tester', status: 'open', tags: 'testing' }],
+    questions: [{ question: 'Does Vitest support snapshot testing?', asker: 'Tester', status: 'open', tags: 'testing' }],
+    events: [],
+  }, '2026-03-28');
+
+  const fullProfile = profiles.getProfile('full');
+  const context = store.getActiveContext(memDriver, fullProfile, {
+    recencyDays: 365,
+    maxItems: { decisions: 3, tasks: 3, questions: 3, facts: 3, topics: 3 },
+  });
+
+  assert(context.decisions !== undefined, 'Context includes decisions');
+  assert(context.tasks !== undefined, 'Context includes tasks');
+  assert(context.questions !== undefined, 'Context includes questions');
+  assert(context.facts !== undefined, 'Context includes facts');
+  assert(context.topics !== undefined, 'Context includes topics');
+  assert(context.decisions.length >= 1, 'Context has open decisions');
+  assert(context.tasks.length >= 1, 'Context has open tasks');
+  assert(context.questions.length >= 1, 'Context has open questions');
+
+  // formatContext
+  const text = store.formatContext(context, 500);
+  assert(typeof text === 'string', 'formatContext returns string');
+  assert(text.length > 0, 'formatContext produces non-empty text');
+  assert(text.includes('[id:'), 'Context text includes entity IDs');
+  assert(text.includes('Open decisions:'), 'Context includes decisions section');
+  assert(text.includes('Open tasks:'), 'Context includes tasks section');
+
+  // Empty context
+  const emptyContext = store.getActiveContext(memDriver, { entities: [] }, {});
+  const emptyText = store.formatContext(emptyContext, 500);
+  assert(emptyText === '', 'Empty context returns empty string');
+
+  // Knowledge profile should not include decisions/tasks/questions
+  const knowledgeProfile = profiles.getProfile('knowledge');
+  const knowledgeContext = store.getActiveContext(memDriver, knowledgeProfile, { recencyDays: 365 });
+  assert(knowledgeContext.decisions === undefined, 'Knowledge profile excludes decisions');
+  assert(knowledgeContext.tasks === undefined, 'Knowledge profile excludes tasks');
+  assert(knowledgeContext.facts !== undefined, 'Knowledge profile includes facts');
+
+  memDriver.close();
+}
+
+function testBuildPromptWithContext() {
+  console.log('\n--- Test: buildPrompt with context ---');
+
+  const teamProfile = profiles.getProfile('team');
+  const messages = '[2026-03-28] alice: The migration is complete\n[2026-03-28] bob: Great, so we agreed on PostgreSQL then';
+  const contextSection = 'Open decisions:\n  [id:5] Use PostgreSQL instead of MySQL -- status: proposed\nOpen tasks:\n  [id:12] Run migration script -- bob, open';
+
+  // With context
+  const promptWithContext = buildPrompt(messages, teamProfile, {
+    contextSection,
+  });
+  assert(promptWithContext.includes('EXISTING KNOWLEDGE'), 'Prompt includes EXISTING KNOWLEDGE section');
+  assert(promptWithContext.includes('[id:5]'), 'Prompt includes decision ID');
+  assert(promptWithContext.includes('"updates"'), 'Prompt includes updates schema');
+  assert(promptWithContext.includes('Update rules:'), 'Prompt includes update rules');
+  assert(promptWithContext.includes('ONLY reference IDs'), 'Update rules mention ID constraint');
+
+  // With overlap
+  const overlapMessages = '[2026-03-28] alice: Should we switch to PostgreSQL?';
+  const promptWithOverlap = buildPrompt(messages, teamProfile, {
+    overlapMessages,
+  });
+  assert(promptWithOverlap.includes('PREVIOUS MESSAGES'), 'Prompt includes PREVIOUS MESSAGES section');
+  assert(promptWithOverlap.includes('do NOT extract from these'), 'Overlap section has warning');
+  assert(!promptWithOverlap.includes('"updates"'), 'No updates schema without context');
+
+  // Without context or overlap (backward compat)
+  const promptPlain = buildPrompt(messages, teamProfile);
+  assert(!promptPlain.includes('EXISTING KNOWLEDGE'), 'Plain prompt has no context section');
+  assert(!promptPlain.includes('PREVIOUS MESSAGES'), 'Plain prompt has no overlap section');
+  assert(!promptPlain.includes('"updates"'), 'Plain prompt has no updates schema');
+
+  // Update schema only includes entities in profile
+  const knowledgeProfile = profiles.getProfile('knowledge');
+  const promptKnowledge = buildPrompt(messages, knowledgeProfile, { contextSection: 'some context' });
+  assert(!promptKnowledge.includes('"updates"'), 'Knowledge profile has no updateable entities');
+
+  // formatMessages
+  const msgs = [
+    { sender: 'alice', timestamp: '2026-01-01', content: 'hello' },
+    { senderName: 'bob', timestamp: '2026-01-02', content: 'world' },
+  ];
+  const formatted = formatMessages(msgs);
+  assert(formatted.includes('[2026-01-01] alice: hello'), 'formatMessages formats sender correctly');
+  assert(formatted.includes('[2026-01-02] bob: world'), 'formatMessages handles senderName');
+}
+
+function testMigrationV05() {
+  console.log('\n--- Test: v0.4 to v0.5 migration ---');
+
+  // Create a v0.4 database (has entity tables but no updated_at, no total_updates_applied)
+  const V04_DB = path.join(TEST_DIR, 'v04.db');
+  if (fs.existsSync(V04_DB)) fs.unlinkSync(V04_DB);
+  execSync(`sqlite3 "${V04_DB}"`, {
+    input: `
+      PRAGMA journal_mode=WAL;
+      CREATE TABLE members (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, display_name TEXT, expertise TEXT DEFAULT '', projects TEXT DEFAULT '', preferences TEXT DEFAULT '', first_seen TEXT, last_seen TEXT, updated_at TEXT DEFAULT (datetime('now')));
+      CREATE TABLE facts (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT NOT NULL, content TEXT NOT NULL, source_member_id INTEGER, tags TEXT DEFAULT '', confidence REAL DEFAULT 0.8, message_date TEXT, created_at TEXT DEFAULT (datetime('now')));
+      CREATE TABLE topics (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, summary TEXT, participants TEXT DEFAULT '', message_date TEXT, tags TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now')));
+      CREATE TABLE decisions (id INTEGER PRIMARY KEY AUTOINCREMENT, description TEXT NOT NULL, participants TEXT DEFAULT '', context TEXT DEFAULT '', status TEXT DEFAULT 'proposed', tags TEXT DEFAULT '', message_date TEXT, created_at TEXT DEFAULT (datetime('now')));
+      CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, description TEXT NOT NULL, assignee TEXT DEFAULT '', deadline TEXT, status TEXT DEFAULT 'open', source_member_id INTEGER, tags TEXT DEFAULT '', message_date TEXT, created_at TEXT DEFAULT (datetime('now')));
+      CREATE TABLE questions (id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT NOT NULL, asker TEXT DEFAULT '', answer TEXT, answered_by TEXT DEFAULT '', status TEXT DEFAULT 'open', tags TEXT DEFAULT '', message_date TEXT, created_at TEXT DEFAULT (datetime('now')));
+      CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT DEFAULT '', event_date TEXT, location TEXT DEFAULT '', attendees TEXT DEFAULT '', tags TEXT DEFAULT '', message_date TEXT, created_at TEXT DEFAULT (datetime('now')));
+      CREATE VIRTUAL TABLE members_fts USING fts5(username, display_name, expertise, projects, preferences, content='members', content_rowid='id');
+      CREATE VIRTUAL TABLE facts_fts USING fts5(category, content, tags, content='facts', content_rowid='id');
+      CREATE VIRTUAL TABLE topics_fts USING fts5(name, summary, participants, tags, content='topics', content_rowid='id');
+      CREATE VIRTUAL TABLE decisions_fts USING fts5(description, context, participants, tags, content='decisions', content_rowid='id');
+      CREATE VIRTUAL TABLE tasks_fts USING fts5(description, assignee, tags, content='tasks', content_rowid='id');
+      CREATE VIRTUAL TABLE questions_fts USING fts5(question, answer, asker, tags, content='questions', content_rowid='id');
+      CREATE VIRTUAL TABLE events_fts USING fts5(name, description, attendees, tags, content='events', content_rowid='id');
+      CREATE TABLE extraction_state (id INTEGER PRIMARY KEY CHECK (id = 1), last_processed_id TEXT DEFAULT '0', total_messages_processed INTEGER DEFAULT 0, total_facts_extracted INTEGER DEFAULT 0, total_topics_extracted INTEGER DEFAULT 0, total_decisions_extracted INTEGER DEFAULT 0, total_tasks_extracted INTEGER DEFAULT 0, total_questions_extracted INTEGER DEFAULT 0, total_events_extracted INTEGER DEFAULT 0, total_members_seen INTEGER DEFAULT 0, last_run_at TEXT, created_at TEXT DEFAULT (datetime('now')));
+      INSERT INTO extraction_state (id) VALUES (1);
+      CREATE TABLE lizardbrain_meta (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT DEFAULT (datetime('now')));
+      INSERT INTO lizardbrain_meta (key, value) VALUES ('schema_version', '0.4');
+      INSERT INTO lizardbrain_meta (key, value) VALUES ('profile_name', 'team');
+      INSERT INTO lizardbrain_meta (key, value) VALUES ('profile_entities', 'members,facts,topics,decisions,tasks');
+    `,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  const driver = createDriver(V04_DB);
+  const result = migrate(driver);
+  assert(result.migrated === true, 'v0.4→v0.5 migration ran');
+
+  // Verify updated_at column exists on decisions
+  const decCols = execSync(`sqlite3 "${V04_DB}" "PRAGMA table_info(decisions)"`, { encoding: 'utf-8' });
+  assert(decCols.includes('updated_at'), 'decisions has updated_at column');
+
+  // Verify updated_at column exists on tasks
+  const taskCols = execSync(`sqlite3 "${V04_DB}" "PRAGMA table_info(tasks)"`, { encoding: 'utf-8' });
+  assert(taskCols.includes('updated_at'), 'tasks has updated_at column');
+
+  // Verify updated_at column exists on questions
+  const qCols = execSync(`sqlite3 "${V04_DB}" "PRAGMA table_info(questions)"`, { encoding: 'utf-8' });
+  assert(qCols.includes('updated_at'), 'questions has updated_at column');
+
+  // Verify total_updates_applied column
+  const stateCols = execSync(`sqlite3 "${V04_DB}" "PRAGMA table_info(extraction_state)"`, { encoding: 'utf-8' });
+  assert(stateCols.includes('total_updates_applied'), 'extraction_state has total_updates_applied');
+
+  // Verify schema version
+  const version = driver.read("SELECT value FROM lizardbrain_meta WHERE key = 'schema_version'");
+  assert(version[0]?.value === '0.5', 'Schema version updated to 0.5');
+
+  // Idempotent
+  const result2 = migrate(driver);
+  assert(result2.migrated === false, 'Second v0.5 migration is no-op');
+
+  driver.close();
 }
 
 // --- Run ---
@@ -756,6 +1077,12 @@ async function runAll() {
   testRRFMerge();
   await testFtsOnlySearch();
   await testNewEntityFtsSearch();
+  testBatchOverlap();
+  testEntityUpdates();
+  testProcessExtractionUpdates();
+  testContextQuery();
+  testBuildPromptWithContext();
+  testMigrationV05();
   await testUrlEnrichment();
 
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);

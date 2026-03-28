@@ -31,7 +31,7 @@ src/
   enrichers/
     url.js        — URL metadata enrichment (GitHub API, HTML meta)
 test/
-  run.js          — Integration test suite (165 tests)
+  run.js          — Integration test suite (238 tests)
 examples/         — Example config files for various providers
 docs/
   specs/          — Technical design specs
@@ -71,11 +71,13 @@ Member columns (`expertise`, `projects`) are reused across profiles — the LLM 
 
 - Model-agnostic: any OpenAI-compatible API works for both LLM and embeddings
 - Profile-driven extraction: LLM prompt assembled dynamically from profile config
+- Context-aware extraction: batch overlap prevents split conversations, context injection from DB enables entity updates across runs
+- Entity updates: decisions (status), tasks (status), questions (answers) can be updated by the LLM when it sees existing knowledge in context
 - Deduplication: multi-level (exact prefix match + FTS keyword overlap)
 - Hybrid search: FTS5 + vector kNN merged via Reciprocal Rank Fusion (K=60)
 - Auto-detect available deps at startup — gracefully degrade without optional deps
 - Incremental processing via cursor tracking in extraction_state table
-- Schema migration: v0.3→v0.4 is automatic and idempotent
+- Schema migration: v0.3→v0.4→v0.5 is automatic and idempotent
 
 ## Dependencies
 

@@ -3,6 +3,7 @@
  */
 
 const llm = require('./llm');
+const { formatMessages } = llm;
 const store = require('./store');
 const urlEnricher = require('./enrichers/url');
 const { getProfile } = require('./profiles');
@@ -64,15 +65,33 @@ async function run(adapter, driver, config, options = {}) {
     return { ok: true, skipped: true, messages: messages.length };
   }
 
-  // Batch messages
+  // Batch messages with optional overlap
+  const batchOverlap = config.batchOverlap || 0;
+  const overlap = Math.min(batchOverlap, Math.floor(batchSize / 2));
+  const step = overlap > 0 ? batchSize - overlap : batchSize;
   const batches = [];
-  for (let i = 0; i < messages.length; i += batchSize) {
+  const batchMetas = [];
+  for (let i = 0; i < messages.length; i += step) {
     batches.push(messages.slice(i, i + batchSize));
+    batchMetas.push({ overlapCount: (i === 0) ? 0 : overlap });
   }
+  if (overlap > 0) log(`Batch overlap: ${overlap} messages`);
   log(`Processing ${batches.length} batch(es)...`);
+
+  // Query context from existing knowledge if enabled
+  let contextSection = null;
+  if (config.context?.enabled) {
+    const activeContext = store.getActiveContext(driver, profileConfig, {
+      recencyDays: config.context.recencyDays,
+      maxItems: config.context.maxItems,
+    });
+    contextSection = store.formatContext(activeContext, config.context.tokenBudget);
+    if (contextSection) log(`Context: ${contextSection.split('\n').length} lines injected`);
+  }
 
   let totalFacts = 0, totalTopics = 0, totalMembers = 0, embedded = 0;
   let totalDecisions = 0, totalTasks = 0, totalQuestions = 0, totalEvents = 0;
+  let totalUpdated = 0;
   let maxId = lastId;
 
   for (let i = 0; i < batches.length; i++) {
@@ -92,16 +111,27 @@ async function run(adapter, driver, config, options = {}) {
       }
     }
 
+    // Split overlap from primary messages (cap overlap to leave at least 1 primary message)
+    const overlapCount = Math.min(batchMetas[i].overlapCount, batch.length - 1);
+    const overlapMsgs = overlapCount > 0 ? batch.slice(0, overlapCount) : null;
+    const primaryMsgs = overlapCount > 0 ? batch.slice(overlapCount) : batch;
+
     if (dryRun) {
-      log(`  [DRY RUN] First: ${batch[0].content?.substring(0, 80)}...`);
-      log(`  [DRY RUN] Last:  ${batch[batch.length - 1].content?.substring(0, 80)}...`);
+      log(`  [DRY RUN] First: ${primaryMsgs[0].content?.substring(0, 80)}...`);
+      log(`  [DRY RUN] Last:  ${primaryMsgs[primaryMsgs.length - 1].content?.substring(0, 80)}...`);
+      if (overlapMsgs) log(`  [DRY RUN] Overlap: ${overlapMsgs.length} context messages`);
       continue;
     }
 
     try {
-      const llmConfig = { ...config.llm, profileConfig };
-      const extracted = await llm.extract(batch, llmConfig);
-      const messageDate = batch[0].timestamp?.split('T')[0] || new Date().toISOString().split('T')[0];
+      const llmConfig = {
+        ...config.llm,
+        profileConfig,
+        overlapMessages: overlapMsgs ? formatMessages(overlapMsgs) : null,
+        contextSection,
+      };
+      const extracted = await llm.extract(primaryMsgs, llmConfig);
+      const messageDate = primaryMsgs[0].timestamp?.split('T')[0] || new Date().toISOString().split('T')[0];
 
       const result = store.processExtraction(driver, extracted, messageDate);
       totalFacts += result.totalFacts;
@@ -111,12 +141,14 @@ async function run(adapter, driver, config, options = {}) {
       totalTasks += result.totalTasks;
       totalQuestions += result.totalQuestions;
       totalEvents += result.totalEvents;
+      totalUpdated += result.totalUpdated || 0;
 
       const parts = [`${result.totalMembers} members`, `${result.totalFacts} facts`, `${result.totalTopics} topics`];
       if (result.totalDecisions) parts.push(`${result.totalDecisions} decisions`);
       if (result.totalTasks) parts.push(`${result.totalTasks} tasks`);
       if (result.totalQuestions) parts.push(`${result.totalQuestions} questions`);
       if (result.totalEvents) parts.push(`${result.totalEvents} events`);
+      if (result.totalUpdated) parts.push(`${result.totalUpdated} updates`);
       log(`  Extracted: ${parts.join(', ')}`);
 
       // Only advance cursor on success
@@ -142,6 +174,7 @@ async function run(adapter, driver, config, options = {}) {
       tasksExtracted: totalTasks,
       questionsExtracted: totalQuestions,
       eventsExtracted: totalEvents,
+      updatesApplied: totalUpdated,
     });
   }
 
@@ -179,6 +212,7 @@ async function run(adapter, driver, config, options = {}) {
     tasks: totalTasks,
     questions: totalQuestions,
     events: totalEvents,
+    updated: totalUpdated,
     embedded,
     maxId,
     dryRun,
@@ -190,6 +224,7 @@ async function run(adapter, driver, config, options = {}) {
   if (totalTasks) doneParts.push(`${totalTasks} tasks`);
   if (totalQuestions) doneParts.push(`${totalQuestions} questions`);
   if (totalEvents) doneParts.push(`${totalEvents} events`);
+  if (totalUpdated) doneParts.push(`${totalUpdated} updates`);
   log(`\nDone: ${messages.length} messages → ${doneParts.join(', ')}`);
   if (dryRun) log('[DRY RUN — nothing written]');
 

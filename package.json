@@ -1,7 +1,7 @@
 {
   "name": "lizardbrain",
-  "version": "0.4.0",
-  "description": "Persistent memory for group chats. Profile-driven extraction, hybrid search, model-agnostic.",
+  "version": "0.5.0",
+  "description": "Persistent memory for group chats. Context-aware extraction, entity updates, hybrid search, model-agnostic.",
   "main": "src/index.js",
   "bin": {
     "lizardbrain": "src/cli.js"

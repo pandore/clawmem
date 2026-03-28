@@ -73,6 +73,11 @@ module.exports = {
     whoKnows: store.whoKnows,
     getStats: store.getStats,
     generateRoster: store.generateRoster,
+    updateDecisionStatus: store.updateDecisionStatus,
+    updateTaskStatus: store.updateTaskStatus,
+    updateQuestionAnswer: store.updateQuestionAnswer,
+    getActiveContext: store.getActiveContext,
+    formatContext: store.formatContext,
   },
 
   // Search (hybrid FTS5 + kNN + RRF)
