@@ -1,18 +1,19 @@
-# Lizardbrain
+# LizardBrain
+**Give your group chat a brain.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 [![Version](https://img.shields.io/badge/version-0.5.0-orange.svg)](package.json)
 
-**Your group chat has years of knowledge buried in thousands of messages.** Who knows what, what was decided, what tasks were assigned, what questions were answered -- it's all there, but impossible to find.
+Your group chat has years of knowledge buried in thousands of messages. Who knows what, what was decided, what tasks were assigned, what questions were answered -- it's all there, but impossible to find.
 
-Lizardbrain reads your chat messages, extracts the important stuff using any LLM, and stores it in a searchable database. Run it on a cron, and your AI agent always knows what your group has been talking about.
+LizardBrain reads your chat messages, extracts the important stuff using any LLM, and stores it in a searchable database. Run it on a cron, and your AI agent always knows what your group has been talking about.
 
 ---
 
 ## What problems does it solve?
 
-**"Who on our team knows about Kubernetes?"** -- Instead of asking around, search your memory database. Lizardbrain tracks what each member talks about and builds expertise profiles automatically.
+**"Who on our team knows about Kubernetes?"** -- Instead of asking around, search your memory database. LizardBrain tracks what each member talks about and builds expertise profiles automatically.
 
 **"What did we decide about the database migration?"** -- Decisions made in chat are captured with context and participants. No more scrolling through months of messages.
 
@@ -24,13 +25,13 @@ Lizardbrain reads your chat messages, extracts the important stuff using any LLM
 
 ## How it works
 
-Point Lizardbrain at your chat messages (SQLite, JSONL, or any custom source). It sends batches to a cheap LLM, which extracts structured knowledge. Everything goes into SQLite with full-text search, and optionally vector search for semantic matching.
+Point LizardBrain at your chat messages (SQLite, JSONL, or any custom source). It sends batches to a cheap LLM, which extracts structured knowledge. Everything goes into SQLite with full-text search, and optionally vector search for semantic matching.
 
 ```
 Messages  -->  LLM extracts knowledge  -->  SQLite + search indexes
 ```
 
-You choose a **profile** that matches your group type, and Lizardbrain adjusts what it looks for:
+You choose a **profile** that matches your group type, and LizardBrain adjusts what it looks for:
 
 | Profile | What it extracts | Best for |
 |---------|-----------------|----------|
@@ -68,7 +69,7 @@ Set it up on a cron and forget about it:
 
 ## What gets extracted
 
-Depending on your profile, Lizardbrain pulls out up to 7 types of structured knowledge:
+Depending on your profile, LizardBrain pulls out up to 7 types of structured knowledge:
 
 | Entity | What it captures | Example |
 |--------|-----------------|---------|
@@ -80,13 +81,13 @@ Depending on your profile, Lizardbrain pulls out up to 7 types of structured kno
 | **Questions** | Questions asked and answers given | "Best way to handle migrations?" -- answered |
 | **Events** | Meetings, deadlines, gatherings | "Architecture Review" -- Apr 1, Zoom |
 
-Everything is deduplicated automatically -- if the LLM extracts the same fact twice (even rephrased), Lizardbrain catches it.
+Everything is deduplicated automatically -- if the LLM extracts the same fact twice (even rephrased), LizardBrain catches it.
 
 ### Entity updates
 
 Decisions, tasks, and questions evolve over time. A decision starts as "proposed" and becomes "agreed." A task goes from "open" to "done." A question gets answered.
 
-Lizardbrain handles this automatically when context injection is enabled. The LLM sees existing open entities and can update their status instead of creating duplicates:
+LizardBrain handles this automatically when context injection is enabled. The LLM sees existing open entities and can update their status instead of creating duplicates:
 
 ```
 Run 1: Decision extracted — "Use PostgreSQL" (proposed)
@@ -97,7 +98,7 @@ No manual intervention needed. The LLM references entity IDs from context and ou
 
 ---
 
-## Why Lizardbrain?
+## Why LizardBrain?
 
 **Use any LLM.** OpenAI, Gemini, Groq, Ollama, Mistral -- anything with an OpenAI-compatible API. Cheap models work great for extraction; you don't need a frontier model to pull facts out of chat messages.
 
@@ -109,7 +110,7 @@ No manual intervention needed. The LLM references entity IDs from context and ou
 
 **Context-aware.** The LLM sees existing knowledge from previous runs. Decisions get confirmed, tasks get closed, questions get answered -- entities evolve naturally across extraction runs.
 
-**Links get context.** When someone shares a GitHub repo or web page, Lizardbrain fetches metadata (stars, descriptions, titles) before sending to the LLM, so extracted facts are richer.
+**Links get context.** When someone shares a GitHub repo or web page, LizardBrain fetches metadata (stars, descriptions, titles) before sending to the LLM, so extracted facts are richer.
 
 **Built for agents.** Generate a compact member roster (~30 tokens per person) designed to fit in an agent's system prompt. At 100 members, that's ~3,000 tokens.
 
@@ -189,7 +190,7 @@ Without context, each extraction run is stateless — the LLM doesn't know about
 }
 ```
 
-Before the extraction loop, Lizardbrain queries the DB for recent and active entities (open decisions, pending tasks, unanswered questions) and includes them in every LLM prompt. The LLM can then output updates to existing entities alongside new ones.
+Before the extraction loop, LizardBrain queries the DB for recent and active entities (open decisions, pending tasks, unanswered questions) and includes them in every LLM prompt. The LLM can then output updates to existing entities alongside new ones.
 
 | Option | Default | Description |
 |--------|---------|-------------|
