@@ -4,6 +4,25 @@
 
 const { createDriver } = require('./driver');
 
+// Single source of truth for performance indexes (used in SCHEMA_SQL and migrate())
+const PERFORMANCE_INDEXES = [
+  'CREATE INDEX IF NOT EXISTS idx_members_display_name ON members(display_name)',
+  'CREATE INDEX IF NOT EXISTS idx_facts_source_member ON facts(source_member_id)',
+  'CREATE INDEX IF NOT EXISTS idx_tasks_source_member ON tasks(source_member_id)',
+  'CREATE INDEX IF NOT EXISTS idx_decisions_status_created ON decisions(status, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_questions_status_created ON questions(status, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_facts_created_at ON facts(created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_topics_created_at ON topics(created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_members_last_seen ON members(last_seen)',
+];
+
+function applyIndexes(driver) {
+  for (const stmt of PERFORMANCE_INDEXES) {
+    driver.write(stmt + ';');
+  }
+}
+
 const SCHEMA_SQL = `
 PRAGMA journal_mode=WAL;
 
@@ -285,15 +304,7 @@ CREATE TABLE IF NOT EXISTS embedding_metadata (
 );
 
 -- Performance indexes
-CREATE INDEX IF NOT EXISTS idx_members_display_name ON members(display_name);
-CREATE INDEX IF NOT EXISTS idx_facts_source_member ON facts(source_member_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_source_member ON tasks(source_member_id);
-CREATE INDEX IF NOT EXISTS idx_decisions_status_created ON decisions(status, created_at);
-CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at);
-CREATE INDEX IF NOT EXISTS idx_questions_status_created ON questions(status, created_at);
-CREATE INDEX IF NOT EXISTS idx_facts_created_at ON facts(created_at);
-CREATE INDEX IF NOT EXISTS idx_topics_created_at ON topics(created_at);
-CREATE INDEX IF NOT EXISTS idx_members_last_seen ON members(last_seen);
+${PERFORMANCE_INDEXES.map(s => s + ';').join('\n')}
 `;
 
 function init(dbPath, { force = false, profile = 'knowledge' } = {}) {
@@ -334,21 +345,7 @@ function migrate(driver) {
   const meta = driver.read("SELECT value FROM lizardbrain_meta WHERE key = 'schema_version'");
   const version = meta[0]?.value;
   if (version >= '0.6') {
-    // Ensure performance indexes exist (added post-v0.6, idempotent)
-    const indexSql = `
-      CREATE INDEX IF NOT EXISTS idx_members_display_name ON members(display_name);
-      CREATE INDEX IF NOT EXISTS idx_facts_source_member ON facts(source_member_id);
-      CREATE INDEX IF NOT EXISTS idx_tasks_source_member ON tasks(source_member_id);
-      CREATE INDEX IF NOT EXISTS idx_decisions_status_created ON decisions(status, created_at);
-      CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at);
-      CREATE INDEX IF NOT EXISTS idx_questions_status_created ON questions(status, created_at);
-      CREATE INDEX IF NOT EXISTS idx_facts_created_at ON facts(created_at);
-      CREATE INDEX IF NOT EXISTS idx_topics_created_at ON topics(created_at);
-      CREATE INDEX IF NOT EXISTS idx_members_last_seen ON members(last_seen);
-    `;
-    for (const stmt of indexSql.split(';').map(s => s.trim()).filter(Boolean)) {
-      driver.write(stmt + ';');
-    }
+    applyIndexes(driver); // Ensure performance indexes exist (idempotent)
     return { migrated: false, message: 'Already at v0.6' };
   }
 
@@ -483,21 +480,7 @@ function migrate(driver) {
 
   driver.write("INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('schema_version', '0.6', datetime('now'));");
 
-  // Performance indexes (idempotent — safe on any v0.6+ database)
-  const indexSql = `
-    CREATE INDEX IF NOT EXISTS idx_members_display_name ON members(display_name);
-    CREATE INDEX IF NOT EXISTS idx_facts_source_member ON facts(source_member_id);
-    CREATE INDEX IF NOT EXISTS idx_tasks_source_member ON tasks(source_member_id);
-    CREATE INDEX IF NOT EXISTS idx_decisions_status_created ON decisions(status, created_at);
-    CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON tasks(status, created_at);
-    CREATE INDEX IF NOT EXISTS idx_questions_status_created ON questions(status, created_at);
-    CREATE INDEX IF NOT EXISTS idx_facts_created_at ON facts(created_at);
-    CREATE INDEX IF NOT EXISTS idx_topics_created_at ON topics(created_at);
-    CREATE INDEX IF NOT EXISTS idx_members_last_seen ON members(last_seen);
-  `;
-  for (const stmt of indexSql.split(';').map(s => s.trim()).filter(Boolean)) {
-    driver.write(stmt + ';');
-  }
+  applyIndexes(driver); // Performance indexes (idempotent)
 
   return { migrated: true, message: 'Migrated to v0.6 schema' };
 }
