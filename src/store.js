@@ -64,24 +64,17 @@ function insertFact(driver, fact, memberId, messageDate, sourceAgent) {
   // This catches semantically similar facts even when LLM rephrases them.
   const content = fact.content || '';
 
-  // 1. Exact prefix match (fast path)
+  // Dedup: combined exact-prefix + FTS keyword check in single query
   const prefix = esc(content.substring(0, 80).toLowerCase());
-  const exactMatch = driver.read(
-    `SELECT id FROM facts WHERE LOWER(SUBSTR(content, 1, 80)) = '${prefix}'`
-  );
-  if (exactMatch.length > 0) return false;
-
-  // 2. FTS similarity check: use first 2 distinctive keywords to find similar existing facts.
-  //    Two keywords is enough to identify a topic ("langchain AND rag", "hetzner AND vps").
-  //    Using more risks missing rephrased duplicates.
   const keywords = extractKeywords(content);
-  if (keywords.length >= 2) {
-    const ftsQuery = esc(keywords.slice(0, 2).join(' AND '));
-    const ftsMatch = driver.read(
-      `SELECT id FROM facts WHERE id IN (SELECT rowid FROM facts_fts WHERE facts_fts MATCH '${ftsQuery}') AND category = '${esc(fact.category)}' LIMIT 1`
-    );
-    if (ftsMatch.length > 0) return false;
-  }
+  const ftsQuery = keywords.length >= 2 ? esc(keywords.slice(0, 2).join(' AND ')) : '';
+
+  const duplicate = driver.read(
+    `SELECT id FROM facts WHERE LOWER(SUBSTR(content, 1, 80)) = '${prefix}'` +
+    (ftsQuery ? ` OR (id IN (SELECT rowid FROM facts_fts WHERE facts_fts MATCH '${ftsQuery}') AND category = '${esc(fact.category)}')` : '') +
+    ` LIMIT 1`
+  );
+  if (duplicate.length > 0) return false;
 
   driver.write(`
     INSERT INTO facts (category, content, source_member_id, tags, confidence, message_date, source_agent)
@@ -147,19 +140,15 @@ function insertTopic(driver, topic, messageDate) {
 function insertDecision(driver, decision, messageDate, sourceAgent) {
   const description = decision.description || '';
   const prefix = esc(description.substring(0, 80).toLowerCase());
-  const exactMatch = driver.read(
-    `SELECT id FROM decisions WHERE LOWER(SUBSTR(description, 1, 80)) = '${prefix}'`
-  );
-  if (exactMatch.length > 0) return false;
-
   const keywords = extractKeywords(description);
-  if (keywords.length >= 2) {
-    const ftsQuery = esc(keywords.slice(0, 2).join(' AND '));
-    const ftsMatch = driver.read(
-      `SELECT id FROM decisions WHERE id IN (SELECT rowid FROM decisions_fts WHERE decisions_fts MATCH '${ftsQuery}') LIMIT 1`
-    );
-    if (ftsMatch.length > 0) return false;
-  }
+  const ftsQuery = keywords.length >= 2 ? esc(keywords.slice(0, 2).join(' AND ')) : '';
+
+  const duplicate = driver.read(
+    `SELECT id FROM decisions WHERE LOWER(SUBSTR(description, 1, 80)) = '${prefix}'` +
+    (ftsQuery ? ` OR id IN (SELECT rowid FROM decisions_fts WHERE decisions_fts MATCH '${ftsQuery}')` : '') +
+    ` LIMIT 1`
+  );
+  if (duplicate.length > 0) return false;
 
   driver.write(`
     INSERT INTO decisions (description, participants, context, status, tags, message_date, source_agent)
@@ -179,19 +168,15 @@ function insertDecision(driver, decision, messageDate, sourceAgent) {
 function insertTask(driver, task, memberId, messageDate, sourceAgent) {
   const description = task.description || '';
   const prefix = esc(description.substring(0, 80).toLowerCase());
-  const exactMatch = driver.read(
-    `SELECT id FROM tasks WHERE LOWER(SUBSTR(description, 1, 80)) = '${prefix}'`
-  );
-  if (exactMatch.length > 0) return false;
-
   const keywords = extractKeywords(description);
-  if (keywords.length >= 2) {
-    const ftsQuery = esc(keywords.slice(0, 2).join(' AND '));
-    const ftsMatch = driver.read(
-      `SELECT id FROM tasks WHERE id IN (SELECT rowid FROM tasks_fts WHERE tasks_fts MATCH '${ftsQuery}') LIMIT 1`
-    );
-    if (ftsMatch.length > 0) return false;
-  }
+  const ftsQuery = keywords.length >= 2 ? esc(keywords.slice(0, 2).join(' AND ')) : '';
+
+  const duplicate = driver.read(
+    `SELECT id FROM tasks WHERE LOWER(SUBSTR(description, 1, 80)) = '${prefix}'` +
+    (ftsQuery ? ` OR id IN (SELECT rowid FROM tasks_fts WHERE tasks_fts MATCH '${ftsQuery}')` : '') +
+    ` LIMIT 1`
+  );
+  if (duplicate.length > 0) return false;
 
   driver.write(`
     INSERT INTO tasks (description, assignee, deadline, status, source_member_id, tags, message_date, source_agent)
@@ -212,19 +197,15 @@ function insertTask(driver, task, memberId, messageDate, sourceAgent) {
 function insertQuestion(driver, question, messageDate) {
   const text = question.question || '';
   const prefix = esc(text.substring(0, 80).toLowerCase());
-  const exactMatch = driver.read(
-    `SELECT id FROM questions WHERE LOWER(SUBSTR(question, 1, 80)) = '${prefix}'`
-  );
-  if (exactMatch.length > 0) return false;
-
   const keywords = extractKeywords(text);
-  if (keywords.length >= 2) {
-    const ftsQuery = esc(keywords.slice(0, 2).join(' AND '));
-    const ftsMatch = driver.read(
-      `SELECT id FROM questions WHERE id IN (SELECT rowid FROM questions_fts WHERE questions_fts MATCH '${ftsQuery}') LIMIT 1`
-    );
-    if (ftsMatch.length > 0) return false;
-  }
+  const ftsQuery = keywords.length >= 2 ? esc(keywords.slice(0, 2).join(' AND ')) : '';
+
+  const duplicate = driver.read(
+    `SELECT id FROM questions WHERE LOWER(SUBSTR(question, 1, 80)) = '${prefix}'` +
+    (ftsQuery ? ` OR id IN (SELECT rowid FROM questions_fts WHERE questions_fts MATCH '${ftsQuery}')` : '') +
+    ` LIMIT 1`
+  );
+  if (duplicate.length > 0) return false;
 
   driver.write(`
     INSERT INTO questions (question, asker, answer, answered_by, status, tags, message_date)
@@ -243,22 +224,16 @@ function insertQuestion(driver, question, messageDate) {
 
 function insertEvent(driver, event, messageDate) {
   const name = event.name || '';
-
-  // Prefix dedup (fast path)
   const prefix = esc(name.substring(0, 80).toLowerCase());
-  const exactMatch = driver.read(
-    `SELECT id FROM events WHERE LOWER(SUBSTR(name, 1, 80)) = '${prefix}'`
-  );
-  if (exactMatch.length > 0) return false;
-
   const keywords = extractKeywords(name);
-  if (keywords.length >= 2) {
-    const ftsQuery = esc(keywords.slice(0, 2).join(' AND '));
-    const ftsMatch = driver.read(
-      `SELECT id FROM events WHERE id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH '${ftsQuery}') LIMIT 1`
-    );
-    if (ftsMatch.length > 0) return false;
-  }
+  const ftsQuery = keywords.length >= 2 ? esc(keywords.slice(0, 2).join(' AND ')) : '';
+
+  const duplicate = driver.read(
+    `SELECT id FROM events WHERE LOWER(SUBSTR(name, 1, 80)) = '${prefix}'` +
+    (ftsQuery ? ` OR id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH '${ftsQuery}')` : '') +
+    ` LIMIT 1`
+  );
+  if (duplicate.length > 0) return false;
 
   driver.write(`
     INSERT INTO events (name, description, event_date, location, attendees, tags, message_date)
@@ -523,8 +498,9 @@ function setCursor(driver, id) {
   driver.write(`UPDATE extraction_state SET last_processed_id = '${esc(String(id))}' WHERE id = 1;`);
 }
 
-function getKnownMemberNames(driver) {
-  const rows = driver.read('SELECT display_name FROM members ORDER BY last_seen DESC');
+function getKnownMemberNames(driver, limit = 100) {
+  const safeLimit = Math.max(1, parseInt(limit) || 100);
+  const rows = driver.read(`SELECT display_name FROM members ORDER BY last_seen DESC LIMIT ${safeLimit}`);
   return rows.map(r => r.display_name).filter(Boolean);
 }
 
