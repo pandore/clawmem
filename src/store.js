@@ -30,10 +30,14 @@ function containsCredential(text) {
 const GENERIC_MEMBER_NAMES = new Set([
   'ai agent', 'ai assistant', 'assistant', 'bot', 'chatbot', 'system',
   'admin', 'moderator', 'unknown', 'anonymous', 'user', 'guest',
+  'content agent', 'chat agent', 'virtual assistant',
 ]);
 
+const GENERIC_MEMBER_PATTERN = /^(?:ai|content|chat|virtual|auto)\s+(?:agent|assistant|bot|helper)$/i;
+
 function isGenericMember(name) {
-  return GENERIC_MEMBER_NAMES.has(name.toLowerCase().trim());
+  const normalized = name.toLowerCase().trim();
+  return GENERIC_MEMBER_NAMES.has(normalized) || GENERIC_MEMBER_PATTERN.test(normalized);
 }
 
 function mergeCSV(existing, incoming) {

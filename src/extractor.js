@@ -191,8 +191,9 @@ async function run(adapter, driver, config, options = {}) {
       if (result.totalUpdated) parts.push(`${result.totalUpdated} updates`);
       log(`  Extracted: ${parts.join(', ')}`);
 
-      // Only advance cursor on success
+      // Advance cursor on success — commit immediately for crash recovery
       maxId = batchMaxId > maxId ? batchMaxId : maxId;
+      if (!dryRun) store.setCursor(driver, maxId);
     } catch (err) {
       log(`  Batch ${i + 1} error: ${err.message}`);
     }

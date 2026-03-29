@@ -1,0 +1,26 @@
+{
+  "memoryDbPath": "./lizardbrain.db",
+  "profile": "team",
+  "batchSize": 40,
+  "context": {
+    "enabled": true,
+    "tokenBudget": 1000
+  },
+  "llm": {
+    "provider": "anthropic",
+    "baseUrl": "https://api.anthropic.com",
+    "apiKey": "",
+    "model": "claude-sonnet-4-6"
+  },
+  "source": {
+    "type": "sqlite",
+    "path": "./chat.db",
+    "table": "messages",
+    "columns": {
+      "id": "id",
+      "content": "content",
+      "sender": "sender_name",
+      "timestamp": "created_at"
+    }
+  }
+}

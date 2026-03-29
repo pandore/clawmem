@@ -1243,6 +1243,80 @@ function testCodeFenceStripping() {
   assert(Array.isArray(parsedNoLabel.members), 'Fenced JSON without label also parses');
 }
 
+function testJsonRepair() {
+  console.log('\n--- Test: JSON repair ---');
+  const { repairJson } = require('../src/llm');
+
+  // Valid JSON passes through
+  const valid = '{"members": [], "facts": []}';
+  const parsed = repairJson(valid);
+  assert(Array.isArray(parsed.members), 'Valid JSON passes through repairJson');
+
+  // Code fences
+  const fenced = '```json\n{"members": [], "facts": []}\n```';
+  const parsedFenced = repairJson(fenced);
+  assert(Array.isArray(parsedFenced.members), 'Fenced JSON repaired');
+
+  // Trailing comma
+  const trailingComma = '{"facts": [{"content": "test"},]}';
+  const parsedComma = repairJson(trailingComma);
+  assert(parsedComma.facts.length === 1, 'Trailing comma repaired');
+
+  // Truncated array (simulates LLM output cut mid-generation)
+  const truncated = '{"facts": [{"content": "fact 1", "category": "tool"}, {"content": "fact 2", "category": "tech';
+  const parsedTrunc = repairJson(truncated);
+  assert(parsedTrunc.facts.length === 1, `Truncated JSON repaired: kept ${parsedTrunc.facts.length} valid element`);
+  assert(parsedTrunc.facts[0].content === 'fact 1', 'First complete element preserved');
+
+  // Truncated with multiple valid elements
+  const truncated2 = '{"members": [{"display_name": "Alice"}, {"display_name": "Bob"}], "facts": [{"content": "good"}, {"content": "trunca';
+  const parsedTrunc2 = repairJson(truncated2);
+  assert(parsedTrunc2.members.length === 2, 'Members preserved in truncated JSON');
+  assert(parsedTrunc2.facts.length === 1, 'Last complete fact kept, truncated one dropped');
+}
+
+function testAnthropicDetection() {
+  console.log('\n--- Test: Anthropic provider detection ---');
+  const { isAnthropic } = require('../src/llm');
+
+  assert(isAnthropic({ provider: 'anthropic', baseUrl: 'https://example.com' }), 'Explicit provider=anthropic detected');
+  assert(isAnthropic({ baseUrl: 'https://api.anthropic.com/v1' }), 'anthropic.com in URL detected');
+  assert(!isAnthropic({ baseUrl: 'https://api.openai.com/v1' }), 'OpenAI URL not detected as Anthropic');
+  assert(!isAnthropic({ provider: 'openai', baseUrl: 'https://api.openai.com/v1' }), 'Explicit provider=openai not Anthropic');
+  assert(!isAnthropic({}), 'Empty config not Anthropic');
+}
+
+function testExpandedGenericFilter() {
+  console.log('\n--- Test: expanded generic member filter ---');
+
+  const driver = createDriver(MEMORY_DB);
+  const store = require('../src/store');
+
+  // Clear dependent tables first (FK constraints), then members
+  driver.write('DELETE FROM facts;');
+  driver.write('DELETE FROM tasks;');
+  driver.write('DELETE FROM members;');
+
+  const extracted = {
+    members: [
+      { display_name: 'Content Agent', expertise: 'content strategy' },
+      { display_name: 'Chat Bot', expertise: 'conversation' },
+      { display_name: 'Auto Helper', expertise: 'automation' },
+      { display_name: 'Virtual Assistant', expertise: 'scheduling' },
+      { display_name: 'Oleksii', expertise: 'engineering' },
+      { display_name: 'AI Bot', expertise: 'machine learning' },
+    ],
+    facts: [],
+    topics: [],
+  };
+
+  store.processExtraction(driver, extracted, '2026-03-29');
+  const members = driver.read('SELECT display_name FROM members');
+  assert(members.length === 1, `Only 1 real member stored (got ${members.length})`);
+  assert(members[0].display_name === 'Oleksii', 'Real member preserved');
+  driver.close();
+}
+
 // --- Run ---
 
 async function runAll() {
@@ -1275,6 +1349,9 @@ async function runAll() {
   testCredentialFiltering();
   testGenericMemberFiltering();
   testCodeFenceStripping();
+  testJsonRepair();
+  testAnthropicDetection();
+  testExpandedGenericFilter();
   testStdinAdapter();
   await testUrlEnrichment();
 

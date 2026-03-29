@@ -1,0 +1,9 @@
+{
+  "name": "memory-recall",
+  "version": "0.6.0",
+  "type": "module",
+  "main": "openclaw-plugin.ts",
+  "dependencies": {
+    "lizardbrain": ">=0.6.0"
+  }
+}

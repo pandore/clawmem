@@ -4,9 +4,23 @@
  * Uses the programmatic API (require('lizardbrain')) instead of shelling out.
  * Requires: npm install lizardbrain
  *
- * Install: copy to ~/.openclaw/extensions/memory-recall/index.ts
- * Config in openclaw.json:
- *   { "plugins": { "entries": { "memory-recall": { "enabled": true } } } }
+ * Setup:
+ *   1. Create plugin directory: ~/.openclaw/extensions/memory-recall/
+ *   2. Copy this file as index.ts (or openclaw-plugin.ts)
+ *   3. Copy openclaw.plugin.json to the same directory
+ *   4. Create package.json in the same directory (see openclaw-plugin-package.json):
+ *        { "name": "memory-recall", "version": "0.6.0", "type": "module", "main": "openclaw-plugin.ts" }
+ *   5. Run: npm install lizardbrain
+ *   6. Register in openclaw.json (NOT in plugins.installs — that causes silent skipping):
+ *        {
+ *          "plugins": {
+ *            "allow": ["memory-recall"],
+ *            "entries": { "memory-recall": { "enabled": true } }
+ *          }
+ *        }
+ *
+ * IMPORTANT: Do NOT use plugins.installs with source: "path" — it silently skips the plugin.
+ *            Only use plugins.allow + plugins.entries for local plugins.
  *
  * Recommended integration pattern (two layers):
  *   1. STATIC (refreshed daily): inject `lizardbrain roster` into system prompt

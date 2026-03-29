@@ -18,6 +18,7 @@ const DEFAULTS = {
     maxItems: { decisions: 5, tasks: 10, questions: 5, facts: 5, topics: 3 },
   },
   llm: {
+    provider: null, // null = auto-detect, 'openai', 'anthropic'
     baseUrl: '',
     apiKey: '',
     model: '',
@@ -98,6 +99,7 @@ function load(configPath) {
     sourceAgent: fileConfig.sourceAgent || process.env.LIZARDBRAIN_SOURCE_AGENT || DEFAULTS.sourceAgent,
     conversationType: fileConfig.conversationType || process.env.LIZARDBRAIN_CONVERSATION_TYPE || DEFAULTS.conversationType,
     llm: {
+      provider: fileConfig.llm?.provider || process.env.LIZARDBRAIN_LLM_PROVIDER || DEFAULTS.llm.provider,
       baseUrl: fileConfig.llm?.baseUrl || process.env.LIZARDBRAIN_LLM_BASE_URL || process.env.LLM_BASE_URL || DEFAULTS.llm.baseUrl,
       apiKey: fileConfig.llm?.apiKey || process.env.LIZARDBRAIN_LLM_API_KEY || process.env.LLM_API_KEY || DEFAULTS.llm.apiKey,
       model: fileConfig.llm?.model || process.env.LIZARDBRAIN_LLM_MODEL || process.env.LLM_MODEL || DEFAULTS.llm.model,

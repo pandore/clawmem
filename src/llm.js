@@ -1,6 +1,6 @@
 /**
- * llm.js — Model-agnostic LLM client using OpenAI-compatible API.
- * Works with: OpenAI, Gemini, Groq, Ollama, LM Studio, vLLM, any OpenAI-compatible endpoint.
+ * llm.js — Model-agnostic LLM client.
+ * Supports: OpenAI-compatible (OpenAI, Gemini, Groq, Ollama, etc.) and Anthropic Messages API.
  */
 
 const { ENTITY_DEFS } = require('./profiles');
@@ -167,6 +167,110 @@ function formatMessages(messages) {
   }).join('\n');
 }
 
+/** Detect whether to use Anthropic Messages API. */
+function isAnthropic(config) {
+  if (config.provider === 'anthropic') return true;
+  if (config.baseUrl?.includes('anthropic.com')) return true;
+  return false;
+}
+
+/**
+ * Attempt to repair truncated or malformed JSON from LLM output.
+ * Handles: code fences, trailing commas, truncated arrays/objects.
+ */
+function repairJson(text) {
+  // Strip code fences
+  let s = text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+
+  // Try clean parse first
+  try { return JSON.parse(s); } catch {}
+
+  // Remove trailing commas before } or ]
+  let cleaned = s.replace(/,(\s*[\]}])/g, '$1');
+  try { return JSON.parse(cleaned); } catch {}
+
+  // Truncation repair: walk backward from end, try closing brackets at each '}'
+  for (let i = cleaned.length - 1; i > 0; i--) {
+    if (cleaned[i] !== '}') continue;
+    const truncated = cleaned.substring(0, i + 1);
+    const closers = getUnclosedBrackets(truncated);
+    if (closers.length === 0) continue;
+    try { return JSON.parse(truncated + closers); } catch { continue; }
+  }
+
+  throw new Error('JSON parse failed (repair unsuccessful)');
+}
+
+/** Count unclosed [ and { and return the closing sequence needed. */
+function getUnclosedBrackets(text) {
+  const stack = [];
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === '"' && text[i - 1] !== '\\') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{') stack.push('}');
+    else if (ch === '[') stack.push(']');
+    else if (ch === '}' || ch === ']') {
+      if (stack.length > 0 && stack[stack.length - 1] === ch) stack.pop();
+    }
+  }
+  return stack.reverse().join('');
+}
+
+function buildRequest(prompt, config) {
+  const { apiKey, baseUrl, model } = config;
+
+  if (isAnthropic(config)) {
+    return {
+      url: baseUrl.replace(/\/+$/, '') + '/v1/messages',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: {
+        model,
+        system: 'You extract structured knowledge from chat messages. Always respond with valid JSON only.',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.1,
+        max_tokens: 4096,
+      },
+    };
+  }
+
+  // OpenAI-compatible format
+  const body = {
+    model,
+    messages: [
+      { role: 'system', content: 'You extract structured knowledge from chat messages. Always respond with valid JSON only.' },
+      { role: 'user', content: prompt },
+    ],
+    temperature: 0.1,
+    max_tokens: 4096,
+    response_format: { type: 'json_object' },
+  };
+
+  return {
+    url: baseUrl.replace(/\/+$/, '') + '/chat/completions',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body,
+  };
+}
+
+function parseResponse(data, config) {
+  if (isAnthropic(config)) {
+    return data.content?.[0]?.text || null;
+  }
+  return data.choices?.[0]?.message?.content || null;
+}
+
 async function extract(messages, config) {
   const {
     apiKey,
@@ -197,40 +301,12 @@ async function extract(messages, config) {
     prompt = EXTRACTION_PROMPT.replace('{messages}', formatted);
   }
 
-  const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
+  const req = buildRequest(prompt, config);
 
-  const body = {
-    model,
-    messages: [
-      {
-        role: 'system',
-        content: 'You extract structured knowledge from chat messages. Always respond with valid JSON only.',
-      },
-      { role: 'user', content: prompt },
-    ],
-    temperature: 0.1,
-    max_tokens: 4096,
-  };
-
-  // Add response_format if supported (OpenAI, Gemini)
-  // Some providers don't support it, so we don't fail if absent
-  body.response_format = { type: 'json_object' };
-
-  const headers = {
-    'Content-Type': 'application/json',
-  };
-
-  // Support both Bearer token and API key in URL (some providers use query params)
-  if (apiKey.startsWith('sk-') || apiKey.startsWith('AIza')) {
-    headers['Authorization'] = `Bearer ${apiKey}`;
-  } else {
-    headers['Authorization'] = `Bearer ${apiKey}`;
-  }
-
-  const res = await fetch(url, {
+  const res = await fetch(req.url, {
     method: 'POST',
-    headers,
-    body: JSON.stringify(body),
+    headers: req.headers,
+    body: JSON.stringify(req.body),
   });
 
   if (!res.ok) {
@@ -239,13 +315,10 @@ async function extract(messages, config) {
   }
 
   const data = await res.json();
-  const content = data.choices?.[0]?.message?.content;
+  const content = parseResponse(data, config);
   if (!content) throw new Error('Empty response from LLM');
 
-  // Strip markdown code fences that some models wrap around JSON
-  const cleaned = content.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
-
-  return JSON.parse(cleaned);
+  return repairJson(content);
 }
 
 /**
@@ -273,4 +346,4 @@ async function extractWithRetry(messages, config, maxRetries = 3) {
   }
 }
 
-module.exports = { extract, extractWithRetry, buildPrompt, formatMessages, EXTRACTION_PROMPT };
+module.exports = { extract, extractWithRetry, buildPrompt, formatMessages, repairJson, isAnthropic, EXTRACTION_PROMPT };

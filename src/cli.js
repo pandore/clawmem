@@ -320,12 +320,22 @@ async function main() {
       // LLM connectivity
       if (cfg.llm?.baseUrl && cfg.llm?.apiKey) {
         try {
-          const url = cfg.llm.baseUrl.replace(/\/+$/, '') + '/models';
-          const res = await fetch(url, {
-            headers: { 'Authorization': `Bearer ${cfg.llm.apiKey}` },
-            signal: AbortSignal.timeout(5000),
-          });
-          health.llm = { reachable: res.ok, status: res.status };
+          const { isAnthropic } = require('./llm');
+          const isAnth = isAnthropic(cfg.llm);
+          const url = isAnth
+            ? cfg.llm.baseUrl.replace(/\/+$/, '') + '/v1/messages'
+            : cfg.llm.baseUrl.replace(/\/+$/, '') + '/models';
+          const headers = isAnth
+            ? { 'x-api-key': cfg.llm.apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' }
+            : { 'Authorization': `Bearer ${cfg.llm.apiKey}` };
+          const fetchOpts = { headers, signal: AbortSignal.timeout(5000) };
+          if (isAnth) {
+            // Anthropic has no /models endpoint; send a minimal request to validate auth
+            fetchOpts.method = 'POST';
+            fetchOpts.body = JSON.stringify({ model: cfg.llm.model || 'claude-sonnet-4-6', max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] });
+          }
+          const res = await fetch(url, fetchOpts);
+          health.llm = { reachable: res.ok, status: res.status, provider: isAnth ? 'anthropic' : 'openai-compatible' };
           if (!res.ok) health.issues.push(`LLM endpoint returned ${res.status}`);
         } catch (err) {
           health.llm = { reachable: false, error: err.message };
@@ -450,12 +460,13 @@ Options:
   --no-embed                        Skip auto-embedding after extraction
 
 Context injection:
-  Configure in lizardbrain.json: "context": { "enabled": true, "tokenBudget": 500 }
+  Configure in lizardbrain.json: "context": { "enabled": true, "tokenBudget": 1000 }
   tokenBudget controls how much existing knowledge is injected into the LLM prompt.
 
 Environment variables:
   LIZARDBRAIN_DB_PATH               Path to memory database
   LIZARDBRAIN_PROFILE               Extraction profile
+  LIZARDBRAIN_LLM_PROVIDER           LLM provider (anthropic, openai, or auto-detect)
   LIZARDBRAIN_LLM_BASE_URL          LLM API base URL
   LIZARDBRAIN_LLM_API_KEY           LLM API key
   LIZARDBRAIN_LLM_MODEL             LLM model name
