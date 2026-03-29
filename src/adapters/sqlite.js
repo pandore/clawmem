@@ -33,6 +33,7 @@ function create(config) {
   const contentCol = columns.content || 'content';
   const senderCol = columns.sender || null;
   const timestampCol = columns.timestamp || null;
+  const conversationCol = columns.conversation || conversationFilter?.column || null;
 
   // Lazily-created driver for this source DB
   let _driver = null;
@@ -105,6 +106,7 @@ function create(config) {
       const selectCols = [idCol, contentCol];
       if (senderCol) selectCols.push(senderCol);
       if (timestampCol) selectCols.push(timestampCol);
+      if (conversationCol) selectCols.push(conversationCol);
 
       const query = `SELECT ${selectCols.join(', ')} FROM ${table} WHERE ${where} ORDER BY ${idCol} ASC`;
       const rows = getDriver().read(query);
@@ -117,6 +119,7 @@ function create(config) {
             content: parsed.content || row[contentCol],
             sender: parsed.sender || (senderCol ? row[senderCol] : 'unknown'),
             timestamp: parsed.timestamp || (timestampCol ? row[timestampCol] : ''),
+            conversationId: conversationCol ? (row[conversationCol] || null) : null,
           };
         }
 
@@ -125,6 +128,7 @@ function create(config) {
           content: row[contentCol] || '',
           sender: senderCol ? (row[senderCol] || 'unknown') : 'unknown',
           timestamp: timestampCol ? (row[timestampCol] || '') : '',
+          conversationId: conversationCol ? (row[conversationCol] || null) : null,
         };
       }).filter(m => m.content && m.content.length > 0);
     },

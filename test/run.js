@@ -775,6 +775,70 @@ function testBatchOverlap() {
   assert(noOverlapBatches[1].length === 5, 'No overlap: batch 2 has 5 messages');
 }
 
+function testConversationBatching() {
+  console.log('\n--- Test: per-conversation batching ---');
+
+  // Messages from 3 different conversations, interleaved by ID order
+  const messages = [
+    { id: '1', sender: 'Alice', content: 'Conv A msg 1', timestamp: '2026-03-28', conversationId: 'conv-a' },
+    { id: '2', sender: 'Bob', content: 'Conv B msg 1', timestamp: '2026-03-28', conversationId: 'conv-b' },
+    { id: '3', sender: 'Alice', content: 'Conv A msg 2', timestamp: '2026-03-28', conversationId: 'conv-a' },
+    { id: '4', sender: 'Charlie', content: 'Conv C msg 1', timestamp: '2026-03-28', conversationId: 'conv-c' },
+    { id: '5', sender: 'Bob', content: 'Conv B msg 2', timestamp: '2026-03-28', conversationId: 'conv-b' },
+    { id: '6', sender: 'Alice', content: 'Conv A msg 3', timestamp: '2026-03-28', conversationId: 'conv-a' },
+    { id: '7', sender: 'Bob', content: 'Conv B msg 3', timestamp: '2026-03-28', conversationId: 'conv-b' },
+    { id: '8', sender: 'Charlie', content: 'Conv C msg 2', timestamp: '2026-03-28', conversationId: 'conv-c' },
+  ];
+
+  const batchSize = 5;
+  const step = batchSize;
+  const batches = [];
+
+  // Replicate extractor grouping logic
+  const hasConversations = messages.some(m => m.conversationId);
+  assert(hasConversations, 'Messages have conversationId fields');
+
+  const groups = new Map();
+  for (const m of messages) {
+    const key = m.conversationId || '__no_conversation__';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(m);
+  }
+
+  assert(groups.size === 3, `Grouped into ${groups.size} conversations (expected 3)`);
+  assert(groups.get('conv-a').length === 3, 'Conv A has 3 messages');
+  assert(groups.get('conv-b').length === 3, 'Conv B has 3 messages');
+  assert(groups.get('conv-c').length === 2, 'Conv C has 2 messages');
+
+  for (const [, groupMsgs] of groups) {
+    for (let i = 0; i < groupMsgs.length; i += step) {
+      batches.push(groupMsgs.slice(i, i + batchSize));
+    }
+  }
+
+  // Each conversation fits in one batch (all < batchSize=5)
+  assert(batches.length === 3, `Created ${batches.length} batches (expected 3, one per conversation)`);
+
+  // Verify no cross-conversation mixing
+  for (let b = 0; b < batches.length; b++) {
+    const convIds = new Set(batches[b].map(m => m.conversationId));
+    assert(convIds.size === 1, `Batch ${b + 1} has messages from exactly 1 conversation`);
+  }
+
+  // Fallback: messages without conversationId use chronological batching
+  const noConvMessages = messages.map(m => ({ ...m, conversationId: null }));
+  const hasConv2 = noConvMessages.some(m => m.conversationId);
+  assert(!hasConv2, 'Null conversationId falls back to chronological batching');
+
+  const fallbackBatches = [];
+  for (let i = 0; i < noConvMessages.length; i += batchSize) {
+    fallbackBatches.push(noConvMessages.slice(i, i + batchSize));
+  }
+  assert(fallbackBatches.length === 2, `Fallback: ${fallbackBatches.length} batches (expected 2)`);
+  assert(fallbackBatches[0].length === 5, 'Fallback batch 1 has 5 messages');
+  assert(fallbackBatches[1].length === 3, 'Fallback batch 2 has 3 messages');
+}
+
 function testEntityUpdates() {
   console.log('\n--- Test: entity updates ---');
 
@@ -1152,6 +1216,7 @@ async function runAll() {
   await testFtsOnlySearch();
   await testNewEntityFtsSearch();
   testBatchOverlap();
+  testConversationBatching();
   testEntityUpdates();
   testProcessExtractionUpdates();
   testContextQuery();

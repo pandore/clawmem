@@ -28,6 +28,7 @@ function create(config) {
   const contentField = fields.content || 'content';
   const senderField = fields.sender || 'sender';
   const timestampField = fields.timestamp || 'timestamp';
+  const conversationField = fields.conversationId || fields.conversation || null;
 
   return {
     name: 'jsonl',
@@ -62,6 +63,7 @@ function create(config) {
             content: obj[contentField] || '',
             sender: obj[senderField] || 'unknown',
             timestamp: obj[timestampField] || '',
+            conversationId: conversationField ? (obj[conversationField] || null) : null,
           });
         } catch {}
       }

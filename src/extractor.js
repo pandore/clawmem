@@ -69,15 +69,33 @@ async function run(adapter, driver, config, options = {}) {
     return { ok: true, skipped: true, messages: messages.length };
   }
 
-  // Batch messages with optional overlap
+  // Group messages by conversationId (if present), then batch within each group
   const batchOverlap = config.batchOverlap || 0;
   const overlap = Math.min(batchOverlap, Math.floor(batchSize / 2));
   const step = overlap > 0 ? batchSize - overlap : batchSize;
   const batches = [];
   const batchMetas = [];
-  for (let i = 0; i < messages.length; i += step) {
-    batches.push(messages.slice(i, i + batchSize));
-    batchMetas.push({ overlapCount: (i === 0) ? 0 : overlap });
+
+  const hasConversations = messages.some(m => m.conversationId);
+  if (hasConversations) {
+    const groups = new Map();
+    for (const m of messages) {
+      const key = m.conversationId || '__no_conversation__';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(m);
+    }
+    log(`Conversation groups: ${groups.size}`);
+    for (const [, groupMsgs] of groups) {
+      for (let i = 0; i < groupMsgs.length; i += step) {
+        batches.push(groupMsgs.slice(i, i + batchSize));
+        batchMetas.push({ overlapCount: (i === 0) ? 0 : overlap });
+      }
+    }
+  } else {
+    for (let i = 0; i < messages.length; i += step) {
+      batches.push(messages.slice(i, i + batchSize));
+      batchMetas.push({ overlapCount: (i === 0) ? 0 : overlap });
+    }
   }
   if (overlap > 0) log(`Batch overlap: ${overlap} messages`);
 
