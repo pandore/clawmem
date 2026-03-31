@@ -367,17 +367,20 @@ async function extractFromText(text, config, profileConfig) {
   if (!config?.llm?.baseUrl || !config?.llm?.apiKey) {
     throw new Error('LLM not configured. Set llm config in lizardbrain.json.');
   }
+  if (!config?.llm?.model) {
+    throw new Error('LLM model not configured. Set llm.model in lizardbrain.json.');
+  }
 
-  // Build the formatted messages string that extractWithRetry expects
-  const formatted = `[unknown] user: ${text}`;
+  // Wrap text as a message array — formatMessages() expects [{content, sender, timestamp}]
+  const messages = [{ content: text, sender: 'user', timestamp: '' }];
 
-  // extractWithRetry expects the LLM config directly (not nested under .llm)
+  // extractWithRetry expects flat LLM config (not nested under .llm)
   const llmConfig = { ...config.llm };
   if (profileConfig) {
     llmConfig.profileConfig = profileConfig;
   }
 
-  const result = await extractWithRetry(formatted, llmConfig);
+  const result = await extractWithRetry(messages, llmConfig);
   return result;
 }
 

@@ -17,10 +17,11 @@ function assembleContext(driver, options = {}) {
   const {
     participants = [],
     topics = [],
-    recencyDays = 30,
+    recencyDays: rawRecency = 30,
     tokenBudget: rawBudget = 1000,
   } = options;
 
+  const recencyDays = Math.max(0, Math.min(365, parseInt(rawRecency) || 30));
   const tokenBudget = Math.max(100, Math.min(10000, rawBudget));
   const seen = new Map();
   const result = { participants: [], facts: [], decisions: [], tasks: [], questions: [] };

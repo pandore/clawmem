@@ -41,7 +41,7 @@ function createHandlers(driver, config) {
         const raw = await searchModule.search(driver, args.query, {
           limit: (args.types ? (args.limit || 10) * 3 : args.limit) || 10,
           ftsOnly: args.ftsOnly || false,
-          embeddingConfig: config?.embedding || null,
+          embeddingConfig: config?.embedding?.enabled ? config.embedding : null,
         });
         let results = raw.results.map(r => ({
           type: r.source,
@@ -128,8 +128,8 @@ function createHandlers(driver, config) {
 
     async ingest(args) {
       try {
-        if (!config?.llm?.baseUrl || !config?.llm?.apiKey) {
-          return { isError: true, error: 'LLM not configured. Set llm config in lizardbrain.json.' };
+        if (!config?.llm?.baseUrl || !config?.llm?.apiKey || !config?.llm?.model) {
+          return { isError: true, error: 'LLM not configured. Set llm.baseUrl, llm.apiKey, and llm.model in lizardbrain.json.' };
         }
         const { extractFromText } = require('./llm');
         const { getProfile } = require('./profiles');
