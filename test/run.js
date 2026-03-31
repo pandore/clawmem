@@ -1579,6 +1579,22 @@ async function testMcpIntegration() {
   driver.close();
 }
 
+function testMcpStdoutSafety() {
+  console.log('\n--- Test: mcp-stdout-safety ---');
+
+  // Verify that mcp.js and context.js don't use console.log
+  const mcpSource = fs.readFileSync(path.join(__dirname, '../src/mcp.js'), 'utf-8');
+  const contextSource = fs.readFileSync(path.join(__dirname, '../src/context.js'), 'utf-8');
+
+  // Strip comments and strings, then check for console.log
+  const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*/g, '');
+  const mcpClean = stripComments(mcpSource);
+  const contextClean = stripComments(contextSource);
+
+  assert(!mcpClean.includes('console.log'), 'mcp.js does not use console.log');
+  assert(!contextClean.includes('console.log'), 'context.js does not use console.log');
+}
+
 // --- Run ---
 
 async function runAll() {
@@ -1619,6 +1635,7 @@ async function runAll() {
   testExtractFromText();
   await testMcpToolHandlers();
   await testMcpIntegration();
+  testMcpStdoutSafety();
   await testUrlEnrichment();
 
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
