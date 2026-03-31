@@ -97,6 +97,14 @@ module.exports = {
     url: urlEnricher,
   },
 
+  // MCP
+  createServer: (() => {
+    try { return require('./mcp').createServer; } catch (e) { return null; }
+  })(),
+  context: {
+    assembleContext: require('./context').assembleContext,
+  },
+
   // Adapters
   adapters: {
     sqlite: sqliteAdapter,

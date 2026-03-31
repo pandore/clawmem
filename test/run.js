@@ -1526,6 +1526,59 @@ async function testMcpToolHandlers() {
   driver.close();
 }
 
+async function testMcpIntegration() {
+  console.log('\n--- Test: mcp-integration ---');
+
+  let mcp;
+  try {
+    mcp = require('../src/mcp');
+  } catch (e) {
+    console.log('  SKIP: @modelcontextprotocol/sdk not installed');
+    return;
+  }
+
+  // Setup: fresh DB
+  const intDb = path.join(TEST_DIR, 'mcp-integration.db');
+  lizardbrain.init(intDb, { profile: 'full' });
+  const driver = createDriver(intDb);
+  migrate(driver);
+
+  const handlers = mcp.createHandlers(driver, {});
+
+  // Write knowledge
+  const writeResult = await handlers.add_knowledge({
+    facts: [{ content: 'Integration test fact about MCP servers', category: 'tool', tags: 'mcp,test' }],
+    members: [{ display_name: 'TestUser', username: 'testuser', expertise: 'MCP testing' }],
+    sourceAgent: 'integration-test',
+  });
+  assert(!writeResult.isError, 'integration: write succeeded');
+  assert(writeResult.data.inserted.facts >= 1, 'integration: fact inserted');
+  assert(writeResult.data.inserted.members >= 1, 'integration: member inserted');
+
+  // Read it back via get_context
+  const ctxResult = await handlers.get_context({ participants: ['TestUser'] });
+  assert(!ctxResult.isError, 'integration: get_context succeeded');
+  assert(ctxResult.data.participants.length >= 1, 'integration: participant found');
+  assert(ctxResult.data.participants[0].name === 'TestUser', 'integration: correct participant');
+
+  // Read it back via search
+  const searchResult = await handlers.search({ query: 'MCP servers' });
+  assert(!searchResult.isError, 'integration: search succeeded');
+  assert(searchResult.data.results.length >= 1, 'integration: search found the fact');
+
+  // Stats should reflect the writes
+  const statsResult = await handlers.get_stats({});
+  assert(!statsResult.isError, 'integration: stats succeeded');
+  assert(statsResult.data.facts >= 1, 'integration: stats shows facts');
+  assert(statsResult.data.members >= 1, 'integration: stats shows members');
+
+  // Verify context module is exported from index
+  const idx = require('../src/index');
+  assert(typeof idx.context.assembleContext === 'function', 'integration: assembleContext exported from index');
+
+  driver.close();
+}
+
 // --- Run ---
 
 async function runAll() {
@@ -1565,6 +1618,7 @@ async function runAll() {
   testContextAssembly();
   testExtractFromText();
   await testMcpToolHandlers();
+  await testMcpIntegration();
   await testUrlEnrichment();
 
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
