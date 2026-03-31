@@ -351,4 +351,25 @@ async function extractWithRetry(messages, config, maxRetries = 3) {
   }
 }
 
-module.exports = { extract, extractWithRetry, buildPrompt, formatMessages, repairJson, isAnthropic, EXTRACTION_PROMPT };
+/**
+ * Extract structured knowledge from raw text without adapter/cursor/batching.
+ * Designed for MCP ingest tool — no console.log, no stdout writes.
+ *
+ * @param {string} text - Raw text to extract from
+ * @param {object} config - Full config with llm section { llm: { baseUrl, apiKey, model } }
+ * @param {object} profileConfig - Profile config from getProfile()
+ * @returns {Promise<object>} Extracted entities { members, facts, decisions, ... }
+ */
+async function extractFromText(text, config, profileConfig) {
+  if (!text || typeof text !== 'string') {
+    throw new Error('text is required and must be a string');
+  }
+  if (!config?.llm?.baseUrl || !config?.llm?.apiKey) {
+    throw new Error('LLM not configured. Set llm config in lizardbrain.json.');
+  }
+
+  const result = await extractWithRetry(text, config);
+  return result;
+}
+
+module.exports = { extract, extractWithRetry, extractFromText, buildPrompt, formatMessages, repairJson, isAnthropic, EXTRACTION_PROMPT };

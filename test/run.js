@@ -1393,6 +1393,15 @@ function testContextAssembly() {
   driver.close();
 }
 
+function testExtractFromText() {
+  console.log('\n--- Test: extract-from-text ---');
+
+  const llm = require('../src/llm');
+  assert(typeof llm.extractFromText === 'function', 'extractFromText is exported');
+  assert(typeof llm.buildPrompt === 'function', 'buildPrompt still exported');
+  assert(typeof llm.formatMessages === 'function', 'formatMessages still exported');
+}
+
 // --- Run ---
 
 async function runAll() {
@@ -1430,6 +1439,7 @@ async function runAll() {
   testExpandedGenericFilter();
   testStdinAdapter();
   testContextAssembly();
+  testExtractFromText();
   await testUrlEnrichment();
 
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
