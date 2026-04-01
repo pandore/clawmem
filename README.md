@@ -3,7 +3,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
-[![Version](https://img.shields.io/badge/version-0.7.0-orange.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.8.0-orange.svg)](package.json)
 
 Your group chat has years of knowledge buried in thousands of messages. Who knows what, what was decided, what tasks were assigned, what questions were answered -- it's all there, but impossible to find.
 
