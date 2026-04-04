@@ -3,7 +3,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
-[![Version](https://img.shields.io/badge/version-0.8.0-orange.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.10.0-orange.svg)](package.json)
 
 Your group chat has years of knowledge buried in thousands of messages. Who knows what, what was decided, what tasks were assigned, what questions were answered -- it's all there, but impossible to find.
 
@@ -81,7 +81,7 @@ Depending on your profile, LizardBrain pulls out up to 7 types of structured kno
 | **Questions** | Questions asked and answers given | "Best way to handle migrations?" -- answered |
 | **Events** | Meetings, deadlines, gatherings | "Architecture Review" -- Apr 1, Zoom |
 
-Everything is deduplicated automatically -- if the LLM extracts the same fact twice (even rephrased), LizardBrain catches it.
+Everything is deduplicated automatically -- first via FTS keyword matching, then via embedding similarity (kNN). Even rephrased duplicates are caught.
 
 ### Entity updates
 
@@ -117,6 +117,52 @@ No manual intervention needed. The LLM references entity IDs from context and ou
 **MCP server built in.** Run `lizardbrain serve` and any MCP-compatible client (Claude Desktop, Cursor, custom agents) can read, search, and write knowledge directly. No shell-outs, no parsing CLI output — agents talk to LizardBrain over the Model Context Protocol.
 
 ---
+
+## v0.10 features
+
+<details>
+<summary>Semantic deduplication via embeddings</summary>
+
+After FTS-based dedup, new facts are batch-embedded and checked against the existing `facts_vec` table using kNN (default threshold: 0.15). Near-duplicates are removed from facts, vector, and metadata tables automatically.
+
+New CLI command:
+
+```bash
+node src/cli.js dedup --dry-run          # preview what would be removed
+node src/cli.js dedup                     # remove semantic duplicates
+node src/cli.js dedup --threshold 0.20    # adjust similarity threshold
+```
+
+Enable at extraction time via config:
+
+```json
+{
+  "dedup": { "semantic": true }
+}
+```
+
+</details>
+
+<details>
+<summary>Conversation-level entity filtering</summary>
+
+All entities (except members) now carry a `conversation_id` column, added via schema migration. This threads through the entire stack:
+
+- **Extraction** -- entities are tagged with the conversation they came from
+- **Search** -- `search`, `who_knows`, and FTS/vec queries accept a `conversation_id` filter
+- **CLI** -- `node src/cli.js search "query" --conversation <id>`
+- **MCP** -- `search` and `add_knowledge` tools accept `conversation_id`
+
+Useful for multi-channel setups where you want to scope queries to a specific chat.
+
+</details>
+
+<details>
+<summary>Cross-model embedding isolation</summary>
+
+Vector search now filters by `model_id` from `embedding_metadata`, preventing result corruption when switching between embedding models. The query over-fetches 3x and filters post-hoc to maintain result quality.
+
+</details>
 
 ## v0.7 features
 
@@ -519,10 +565,12 @@ lizardbrain extract [--dry-run] [--reprocess]              Run extraction pipeli
 lizardbrain embed [--stats] [--rebuild]                    Manage vector embeddings
 lizardbrain stats                                          Show database statistics
 lizardbrain health [--json]                                Check system health
-lizardbrain search <query> [--json] [--fts-only] [--limit N]  Search knowledge
+lizardbrain search <query> [--json] [--fts-only]              Search knowledge
+    [--limit N] [--conversation <id>]
 lizardbrain who <keyword>                                  Find members by expertise
 lizardbrain roster [--output path]                         Generate member roster
 lizardbrain reset-cursor [--to <id>]                       Reset extraction cursor
+lizardbrain dedup [--dry-run] [--threshold N]                 Remove semantic duplicates
 lizardbrain prune-embeddings [--orphaned] [--stale] [--model <name>]  Clean up embeddings
 lizardbrain serve                                         Start MCP server (stdio)
 ```
@@ -536,6 +584,7 @@ lizardbrain serve                                         Start MCP server (stdi
 | `--no-embed` | Skip auto-embedding after extraction |
 | `--limit N` | Limit extraction to N batches |
 | `--from <id>` | Start extraction from a specific message ID |
+| `--conversation <id>` | Filter search results by conversation ID |
 
 <details>
 <summary>Environment variables</summary>
