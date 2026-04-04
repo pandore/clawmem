@@ -176,6 +176,23 @@ async function run(adapter, driver, config, options = {}) {
       const conversationId = batch[0]?.conversationId || null;
 
       const result = store.processExtraction(driver, extracted, messageDate, { sourceAgent: config.sourceAgent || null, conversationId });
+
+      // Semantic dedup: if enabled, check new facts against existing embeddings
+      if (config.dedup?.semantic && driver.capabilities.vectors && config.embedding?.enabled && result.insertedFactIds?.length > 0) {
+        try {
+          const duplicateIds = await store.semanticDedupFacts(
+            driver, result.insertedFactIds, config.embedding, { threshold: config.dedup.threshold || 0.15 }
+          );
+          if (duplicateIds.size > 0) {
+            store.removeFacts(driver, [...duplicateIds]);
+            result.totalFacts -= duplicateIds.size;
+            log(`  Semantic dedup: removed ${duplicateIds.size} duplicate fact(s)`);
+          }
+        } catch (err) {
+          log(`  Semantic dedup failed (non-fatal): ${err.message}`);
+        }
+      }
+
       totalFacts += result.totalFacts;
       totalTopics += result.totalTopics;
       totalMembers += result.totalMembers;

@@ -417,6 +417,56 @@ async function main() {
       break;
     }
 
+    case 'dedup': {
+      if (!dbExists(cfg.memoryDbPath)) {
+        console.log('Memory database not found. Run `lizardbrain init` first.');
+        process.exit(1);
+      }
+      if (!cfg.embedding?.enabled) {
+        console.log('Embedding not configured. Add an "embedding" block to lizardbrain.json with enabled: true.');
+        process.exit(1);
+      }
+      const driver = createDriver(cfg.memoryDbPath);
+      migrate(driver);
+      if (!driver.capabilities.vectors) {
+        console.log('Vector search requires better-sqlite3 + sqlite-vec.');
+        driver.close();
+        process.exit(1);
+      }
+
+      const threshold = parseFloat(flagValue('threshold')) || cfg.dedup?.threshold || 0.15;
+      const doDryRun = flag('dry-run');
+      const store = require('./store');
+      const embeddings = require('./embeddings');
+
+      console.log('Ensuring all facts are embedded...');
+      await embeddings.backfill(driver, cfg.embedding);
+
+      const allFacts = driver.read('SELECT id FROM facts ORDER BY id ASC');
+      const factIds = allFacts.map(r => r.id);
+      console.log(`Scanning ${factIds.length} facts for semantic duplicates (threshold: ${threshold})...`);
+
+      const duplicates = await store.semanticDedupFacts(driver, factIds, cfg.embedding, { threshold });
+
+      if (duplicates.size === 0) {
+        console.log('No semantic duplicates found.');
+      } else {
+        console.log(`Found ${duplicates.size} duplicate(s).`);
+        if (doDryRun) {
+          for (const id of duplicates) {
+            const fact = driver.read(`SELECT id, content FROM facts WHERE id = ${parseInt(id)}`);
+            if (fact.length > 0) console.log(`  [${fact[0].id}] ${fact[0].content.substring(0, 80)}...`);
+          }
+          console.log('[DRY RUN — nothing deleted]');
+        } else {
+          store.removeFacts(driver, [...duplicates]);
+          console.log(`Removed ${duplicates.size} duplicate fact(s).`);
+        }
+      }
+      driver.close();
+      break;
+    }
+
     case 'reset-cursor': {
       if (!dbExists(cfg.memoryDbPath)) {
         console.log('Memory database not found. Run `lizardbrain init` first.');
@@ -491,6 +541,7 @@ Commands:
   who <keyword>                       Find members by expertise
   roster [--output path]              Generate member roster
   reset-cursor [--to <id>]            Reset extraction cursor
+  dedup [--dry-run] [--threshold <n>]  Find and remove semantic duplicate facts
   prune-embeddings [--orphaned] [--stale] [--model <name>]  Clean up embeddings
   serve                               Start MCP server (stdio transport)
 

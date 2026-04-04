@@ -415,6 +415,7 @@ function processExtraction(driver, extracted, messageDate, { sourceAgent = null,
   let totalFacts = 0, totalTopics = 0, totalMembers = 0;
   let totalDecisions = 0, totalTasks = 0, totalQuestions = 0, totalEvents = 0;
   const memberIdMap = {};
+  const insertedFactIds = [];
 
   if (extracted.members && Array.isArray(extracted.members)) {
     for (const member of extracted.members) {
@@ -434,6 +435,8 @@ function processExtraction(driver, extracted, messageDate, { sourceAgent = null,
         : null;
       if (insertFact(driver, fact, memberId, messageDate, sourceAgent, conversationId)) {
         totalFacts++;
+        const lastFact = driver.read('SELECT id FROM facts ORDER BY id DESC LIMIT 1');
+        if (lastFact.length > 0) insertedFactIds.push(lastFact[0].id);
       }
     }
   }
@@ -509,7 +512,72 @@ function processExtraction(driver, extracted, messageDate, { sourceAgent = null,
     }
   }
 
-  return { totalFacts, totalTopics, totalMembers, totalDecisions, totalTasks, totalQuestions, totalEvents, totalUpdated };
+  return { totalFacts, totalTopics, totalMembers, totalDecisions, totalTasks, totalQuestions, totalEvents, totalUpdated, insertedFactIds };
+}
+
+/**
+ * Post-FTS semantic dedup for a batch of fact IDs.
+ * Checks each new fact's embedding against existing facts_vec.
+ * Returns Set of fact IDs that are semantic duplicates (should be deleted).
+ */
+async function semanticDedupFacts(driver, newFactIds, embeddingConfig, options = {}) {
+  const { threshold = 0.15 } = options;
+  if (!driver.capabilities.vectors || !driver._db || newFactIds.length === 0) {
+    return new Set();
+  }
+
+  const embeddings = require('./embeddings');
+  const duplicateIds = new Set();
+
+  const placeholders = newFactIds.map(() => '?').join(',');
+  const newFacts = driver._db.prepare(
+    `SELECT id, content FROM facts WHERE id IN (${placeholders})`
+  ).all(...newFactIds);
+
+  if (newFacts.length === 0) return duplicateIds;
+
+  const texts = newFacts.map(f => f.content);
+  let vecs;
+  try {
+    const result = await embeddings.embedWithRetry(texts, embeddingConfig);
+    vecs = result.embeddings;
+  } catch (_) {
+    return duplicateIds;
+  }
+
+  for (let i = 0; i < newFacts.length; i++) {
+    if (duplicateIds.has(newFacts[i].id)) continue;
+    const queryVec = new Float32Array(vecs[i]);
+    try {
+      const neighbors = driver._db.prepare(
+        'SELECT fact_id, distance FROM facts_vec WHERE embedding MATCH ? ORDER BY distance LIMIT 5'
+      ).all(queryVec);
+
+      for (const n of neighbors) {
+        if (n.fact_id === newFacts[i].id) continue;
+        if (n.distance < threshold) {
+          duplicateIds.add(newFacts[i].id);
+          break;
+        }
+      }
+    } catch (_) {
+      // facts_vec may not exist yet
+    }
+  }
+
+  return duplicateIds;
+}
+
+function removeFacts(driver, factIds) {
+  if (factIds.length === 0) return;
+  for (const id of factIds) {
+    driver.write(`DELETE FROM facts WHERE id = ${parseInt(id)}`);
+    // Clean up vec and metadata if present
+    if (driver._db) {
+      try { driver._db.prepare('DELETE FROM facts_vec WHERE fact_id = ?').run(id); } catch (_) {}
+      try { driver._db.prepare("DELETE FROM embedding_metadata WHERE entity_type = 'fact' AND entity_id = ?").run(id); } catch (_) {}
+    }
+  }
 }
 
 function getState(driver) {
@@ -678,4 +746,6 @@ module.exports = {
   getKnownMemberNames,
   getActiveContext,
   formatContext,
+  semanticDedupFacts,
+  removeFacts,
 };
