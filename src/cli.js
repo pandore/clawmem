@@ -142,6 +142,7 @@ async function main() {
         limit: parseInt(args[args.indexOf('--limit') + 1]) || 10,
         ftsOnly: flag('fts-only'),
         embeddingConfig: embCfg,
+        conversationId: flagValue('conversation') || null,
       });
 
       if (flag('json')) {
@@ -486,7 +487,7 @@ Commands:
   embed [--stats] [--rebuild]         Manage vector embeddings
   stats                               Show database statistics
   health [--json]                     Check system health
-  search <query> [--json] [--fts-only] [--limit N]  Search knowledge
+  search <query> [--json] [--fts-only] [--limit N] [--conversation <id>]  Search knowledge
   who <keyword>                       Find members by expertise
   roster [--output path]              Generate member roster
   reset-cursor [--to <id>]            Reset extraction cursor

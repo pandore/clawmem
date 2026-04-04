@@ -95,7 +95,7 @@ function upsertMember(driver, member, messageDate) {
   }
 }
 
-function insertFact(driver, fact, memberId, messageDate, sourceAgent) {
+function insertFact(driver, fact, memberId, messageDate, sourceAgent, conversationId) {
   // Dedup strategy: extract key terms from content and check FTS for similar existing facts.
   // This catches semantically similar facts even when LLM rephrases them.
   const content = fact.content || '';
@@ -116,7 +116,7 @@ function insertFact(driver, fact, memberId, messageDate, sourceAgent) {
   if (duplicate.length > 0) return false;
 
   driver.write(`
-    INSERT INTO facts (category, content, source_member_id, tags, confidence, message_date, source_agent)
+    INSERT INTO facts (category, content, source_member_id, tags, confidence, message_date, source_agent, conversation_id)
     VALUES (
       '${esc(fact.category)}',
       '${esc(content)}',
@@ -124,7 +124,8 @@ function insertFact(driver, fact, memberId, messageDate, sourceAgent) {
       '${esc(fact.tags || '')}',
       ${parseFloat(fact.confidence) || 0.8},
       '${esc(messageDate)}',
-      ${sourceAgent ? `'${esc(sourceAgent)}'` : 'NULL'}
+      ${sourceAgent ? `'${esc(sourceAgent)}'` : 'NULL'},
+      ${conversationId ? `'${esc(conversationId)}'` : 'NULL'}
     );
   `);
   return true;
@@ -152,7 +153,7 @@ function extractKeywords(text) {
     .filter(w => w.length > 2 && !stopwords.has(w));
 }
 
-function insertTopic(driver, topic, messageDate) {
+function insertTopic(driver, topic, messageDate, conversationId) {
   // Dedup: check for existing topic with similar name via FTS (2 keywords)
   const nameKeywords = extractKeywords(topic.name);
   if (nameKeywords.length >= 2) {
@@ -164,19 +165,20 @@ function insertTopic(driver, topic, messageDate) {
   }
 
   driver.write(`
-    INSERT INTO topics (name, summary, participants, message_date, tags)
+    INSERT INTO topics (name, summary, participants, message_date, tags, conversation_id)
     VALUES (
       '${esc(topic.name)}',
       '${esc(topic.summary || '')}',
       '${esc(topic.participants || '')}',
       '${esc(messageDate)}',
-      '${esc(topic.tags || '')}'
+      '${esc(topic.tags || '')}',
+      ${conversationId ? `'${esc(conversationId)}'` : 'NULL'}
     );
   `);
   return true;
 }
 
-function insertDecision(driver, decision, messageDate, sourceAgent) {
+function insertDecision(driver, decision, messageDate, sourceAgent, conversationId) {
   const description = decision.description || '';
   const prefix = esc(description.substring(0, 80).toLowerCase());
   const keywords = extractKeywords(description);
@@ -190,7 +192,7 @@ function insertDecision(driver, decision, messageDate, sourceAgent) {
   if (duplicate.length > 0) return false;
 
   driver.write(`
-    INSERT INTO decisions (description, participants, context, status, tags, message_date, source_agent)
+    INSERT INTO decisions (description, participants, context, status, tags, message_date, source_agent, conversation_id)
     VALUES (
       '${esc(description)}',
       '${esc(decision.participants || '')}',
@@ -198,13 +200,14 @@ function insertDecision(driver, decision, messageDate, sourceAgent) {
       '${esc(decision.status || 'proposed')}',
       '${esc(decision.tags || '')}',
       '${esc(messageDate)}',
-      ${sourceAgent ? `'${esc(sourceAgent)}'` : 'NULL'}
+      ${sourceAgent ? `'${esc(sourceAgent)}'` : 'NULL'},
+      ${conversationId ? `'${esc(conversationId)}'` : 'NULL'}
     );
   `);
   return true;
 }
 
-function insertTask(driver, task, memberId, messageDate, sourceAgent) {
+function insertTask(driver, task, memberId, messageDate, sourceAgent, conversationId) {
   const description = task.description || '';
   const prefix = esc(description.substring(0, 80).toLowerCase());
   const keywords = extractKeywords(description);
@@ -218,7 +221,7 @@ function insertTask(driver, task, memberId, messageDate, sourceAgent) {
   if (duplicate.length > 0) return false;
 
   driver.write(`
-    INSERT INTO tasks (description, assignee, deadline, status, source_member_id, tags, message_date, source_agent)
+    INSERT INTO tasks (description, assignee, deadline, status, source_member_id, tags, message_date, source_agent, conversation_id)
     VALUES (
       '${esc(description)}',
       '${esc(task.assignee || '')}',
@@ -227,13 +230,14 @@ function insertTask(driver, task, memberId, messageDate, sourceAgent) {
       ${memberId || 'NULL'},
       '${esc(task.tags || '')}',
       '${esc(messageDate)}',
-      ${sourceAgent ? `'${esc(sourceAgent)}'` : 'NULL'}
+      ${sourceAgent ? `'${esc(sourceAgent)}'` : 'NULL'},
+      ${conversationId ? `'${esc(conversationId)}'` : 'NULL'}
     );
   `);
   return true;
 }
 
-function insertQuestion(driver, question, messageDate) {
+function insertQuestion(driver, question, messageDate, conversationId) {
   const text = question.question || '';
   const prefix = esc(text.substring(0, 80).toLowerCase());
   const keywords = extractKeywords(text);
@@ -247,7 +251,7 @@ function insertQuestion(driver, question, messageDate) {
   if (duplicate.length > 0) return false;
 
   driver.write(`
-    INSERT INTO questions (question, asker, answer, answered_by, status, tags, message_date)
+    INSERT INTO questions (question, asker, answer, answered_by, status, tags, message_date, conversation_id)
     VALUES (
       '${esc(text)}',
       '${esc(question.asker || '')}',
@@ -255,13 +259,14 @@ function insertQuestion(driver, question, messageDate) {
       '${esc(question.answered_by || '')}',
       '${esc(question.status || 'open')}',
       '${esc(question.tags || '')}',
-      '${esc(messageDate)}'
+      '${esc(messageDate)}',
+      ${conversationId ? `'${esc(conversationId)}'` : 'NULL'}
     );
   `);
   return true;
 }
 
-function insertEvent(driver, event, messageDate) {
+function insertEvent(driver, event, messageDate, conversationId) {
   const name = event.name || '';
   const prefix = esc(name.substring(0, 80).toLowerCase());
   const keywords = extractKeywords(name);
@@ -275,7 +280,7 @@ function insertEvent(driver, event, messageDate) {
   if (duplicate.length > 0) return false;
 
   driver.write(`
-    INSERT INTO events (name, description, event_date, location, attendees, tags, message_date)
+    INSERT INTO events (name, description, event_date, location, attendees, tags, message_date, conversation_id)
     VALUES (
       '${esc(name)}',
       '${esc(event.description || '')}',
@@ -283,7 +288,8 @@ function insertEvent(driver, event, messageDate) {
       '${esc(event.location || '')}',
       '${esc(event.attendees || '')}',
       '${esc(event.tags || '')}',
-      '${esc(messageDate)}'
+      '${esc(messageDate)}',
+      ${conversationId ? `'${esc(conversationId)}'` : 'NULL'}
     );
   `);
   return true;
@@ -405,7 +411,7 @@ function formatContext(context, tokenBudget = 1000) {
   return text;
 }
 
-function processExtraction(driver, extracted, messageDate, { sourceAgent = null } = {}) {
+function processExtraction(driver, extracted, messageDate, { sourceAgent = null, conversationId = null } = {}) {
   let totalFacts = 0, totalTopics = 0, totalMembers = 0;
   let totalDecisions = 0, totalTasks = 0, totalQuestions = 0, totalEvents = 0;
   const memberIdMap = {};
@@ -426,7 +432,7 @@ function processExtraction(driver, extracted, messageDate, { sourceAgent = null 
       const memberId = fact.source_member
         ? memberIdMap[fact.source_member.toLowerCase()] || null
         : null;
-      if (insertFact(driver, fact, memberId, messageDate, sourceAgent)) {
+      if (insertFact(driver, fact, memberId, messageDate, sourceAgent, conversationId)) {
         totalFacts++;
       }
     }
@@ -435,7 +441,7 @@ function processExtraction(driver, extracted, messageDate, { sourceAgent = null 
   if (extracted.topics && Array.isArray(extracted.topics)) {
     for (const topic of extracted.topics) {
       if (!topic.name) continue;
-      if (insertTopic(driver, topic, messageDate)) {
+      if (insertTopic(driver, topic, messageDate, conversationId)) {
         totalTopics++;
       }
     }
@@ -444,7 +450,7 @@ function processExtraction(driver, extracted, messageDate, { sourceAgent = null 
   if (extracted.decisions && Array.isArray(extracted.decisions)) {
     for (const decision of extracted.decisions) {
       if (!decision.description) continue;
-      if (insertDecision(driver, decision, messageDate, sourceAgent)) {
+      if (insertDecision(driver, decision, messageDate, sourceAgent, conversationId)) {
         totalDecisions++;
       }
     }
@@ -456,7 +462,7 @@ function processExtraction(driver, extracted, messageDate, { sourceAgent = null 
       const memberId = task.source_member
         ? memberIdMap[task.source_member.toLowerCase()] || null
         : null;
-      if (insertTask(driver, task, memberId, messageDate, sourceAgent)) {
+      if (insertTask(driver, task, memberId, messageDate, sourceAgent, conversationId)) {
         totalTasks++;
       }
     }
@@ -465,7 +471,7 @@ function processExtraction(driver, extracted, messageDate, { sourceAgent = null 
   if (extracted.questions && Array.isArray(extracted.questions)) {
     for (const question of extracted.questions) {
       if (!question.question) continue;
-      if (insertQuestion(driver, question, messageDate)) {
+      if (insertQuestion(driver, question, messageDate, conversationId)) {
         totalQuestions++;
       }
     }
@@ -474,7 +480,7 @@ function processExtraction(driver, extracted, messageDate, { sourceAgent = null 
   if (extracted.events && Array.isArray(extracted.events)) {
     for (const event of extracted.events) {
       if (!event.name) continue;
-      if (insertEvent(driver, event, messageDate)) {
+      if (insertEvent(driver, event, messageDate, conversationId)) {
         totalEvents++;
       }
     }

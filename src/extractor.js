@@ -173,8 +173,9 @@ async function run(adapter, driver, config, options = {}) {
         continue;
       }
       const messageDate = primaryMsgs[0].timestamp?.split('T')[0] || new Date().toISOString().split('T')[0];
+      const conversationId = batch[0]?.conversationId || null;
 
-      const result = store.processExtraction(driver, extracted, messageDate, { sourceAgent: config.sourceAgent || null });
+      const result = store.processExtraction(driver, extracted, messageDate, { sourceAgent: config.sourceAgent || null, conversationId });
       totalFacts += result.totalFacts;
       totalTopics += result.totalTopics;
       totalMembers += result.totalMembers;
