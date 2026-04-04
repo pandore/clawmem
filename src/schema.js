@@ -15,6 +15,12 @@ const PERFORMANCE_INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_facts_created_at ON facts(created_at)',
   'CREATE INDEX IF NOT EXISTS idx_topics_created_at ON topics(created_at)',
   'CREATE INDEX IF NOT EXISTS idx_members_last_seen ON members(last_seen)',
+  'CREATE INDEX IF NOT EXISTS idx_facts_conversation ON facts(conversation_id)',
+  'CREATE INDEX IF NOT EXISTS idx_decisions_conversation ON decisions(conversation_id)',
+  'CREATE INDEX IF NOT EXISTS idx_tasks_conversation ON tasks(conversation_id)',
+  'CREATE INDEX IF NOT EXISTS idx_questions_conversation ON questions(conversation_id)',
+  'CREATE INDEX IF NOT EXISTS idx_events_conversation ON events(conversation_id)',
+  'CREATE INDEX IF NOT EXISTS idx_topics_conversation ON topics(conversation_id)',
 ];
 
 function applyIndexes(driver) {
@@ -49,6 +55,7 @@ CREATE TABLE IF NOT EXISTS facts (
   confidence REAL DEFAULT 0.8,
   message_date TEXT,
   source_agent TEXT DEFAULT NULL,
+  conversation_id TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -60,6 +67,7 @@ CREATE TABLE IF NOT EXISTS topics (
   participants TEXT DEFAULT '',
   message_date TEXT,
   tags TEXT DEFAULT '',
+  conversation_id TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -137,6 +145,7 @@ CREATE TABLE IF NOT EXISTS decisions (
   tags TEXT DEFAULT '',
   message_date TEXT,
   source_agent TEXT DEFAULT NULL,
+  conversation_id TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT
 );
@@ -152,6 +161,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   tags TEXT DEFAULT '',
   message_date TEXT,
   source_agent TEXT DEFAULT NULL,
+  conversation_id TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT
 );
@@ -166,6 +176,7 @@ CREATE TABLE IF NOT EXISTS questions (
   status TEXT DEFAULT 'open',
   tags TEXT DEFAULT '',
   message_date TEXT,
+  conversation_id TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT
 );
@@ -180,6 +191,7 @@ CREATE TABLE IF NOT EXISTS events (
   attendees TEXT DEFAULT '',
   tags TEXT DEFAULT '',
   message_date TEXT,
+  conversation_id TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -327,7 +339,7 @@ function init(dbPath, { force = false, profile = 'knowledge' } = {}) {
   const { esc } = require('./driver');
   driver.write(`INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('profile_name', '${esc(profile)}', datetime('now'));`);
   driver.write(`INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('profile_entities', '${esc(profileConfig.entities.join(','))}', datetime('now'));`);
-  driver.write(`INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('schema_version', '0.6', datetime('now'));`);
+  driver.write(`INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('schema_version', '0.7', datetime('now'));`);
 
   driver.close();
 
@@ -344,9 +356,9 @@ function migrate(driver) {
   // Check current schema version
   const meta = driver.read("SELECT value FROM lizardbrain_meta WHERE key = 'schema_version'");
   const version = meta[0]?.value;
-  if (version >= '0.6') {
+  if (version >= '0.7') {
     applyIndexes(driver); // Ensure performance indexes exist (idempotent)
-    return { migrated: false, message: 'Already at v0.6' };
+    return { migrated: false, message: 'Already at v0.7' };
   }
 
   // Create new tables (IF NOT EXISTS makes this idempotent)
@@ -480,9 +492,22 @@ function migrate(driver) {
 
   driver.write("INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('schema_version', '0.6', datetime('now'));");
 
+  // v0.7 migration: conversation_id on entity tables (not members — they span conversations)
+  const convTables = ['facts', 'decisions', 'tasks', 'questions', 'events', 'topics'];
+  for (const table of convTables) {
+    try { driver.write(`ALTER TABLE ${table} ADD COLUMN conversation_id TEXT;`); }
+    catch (e) { /* column already exists */ }
+  }
+  for (const table of convTables) {
+    try { driver.write(`CREATE INDEX IF NOT EXISTS idx_${table}_conversation ON ${table}(conversation_id);`); }
+    catch (e) { /* index already exists */ }
+  }
+
+  driver.write("INSERT OR REPLACE INTO lizardbrain_meta (key, value, updated_at) VALUES ('schema_version', '0.7', datetime('now'));");
+
   applyIndexes(driver); // Performance indexes (idempotent)
 
-  return { migrated: true, message: 'Migrated to v0.6 schema' };
+  return { migrated: true, message: 'Migrated to v0.7 schema' };
 }
 
 module.exports = { init, migrate, SCHEMA_SQL };

@@ -46,8 +46,9 @@ function mergeRRF(resultSets, K = 60) {
  * @param {number} limit - Max results per table
  * @returns {Array<{key: string, data: object}>}
  */
-function ftsSearch(driver, query, limit) {
+function ftsSearch(driver, query, limit, conversationId) {
   const escapedQuery = esc(sanitizeFtsQuery(query));
+  const convFilter = conversationId ? ` AND f.conversation_id = '${esc(conversationId)}'` : '';
   const results = [];
 
   // Search facts_fts
@@ -55,7 +56,7 @@ function ftsSearch(driver, query, limit) {
     `SELECT f.id, f.content, f.confidence, f.tags, f.category, m.display_name as member
      FROM facts f
      LEFT JOIN members m ON f.source_member_id = m.id
-     WHERE f.id IN (SELECT rowid FROM facts_fts WHERE facts_fts MATCH '${escapedQuery}')
+     WHERE f.id IN (SELECT rowid FROM facts_fts WHERE facts_fts MATCH '${escapedQuery}')${convFilter}
      ORDER BY f.confidence DESC
      LIMIT ${limit}`
   );
@@ -75,10 +76,11 @@ function ftsSearch(driver, query, limit) {
   }
 
   // Search topics_fts
+  const topicConvFilter = conversationId ? ` AND conversation_id = '${esc(conversationId)}'` : '';
   const topics = driver.read(
     `SELECT id, name, summary, tags, participants
      FROM topics
-     WHERE id IN (SELECT rowid FROM topics_fts WHERE topics_fts MATCH '${escapedQuery}')
+     WHERE id IN (SELECT rowid FROM topics_fts WHERE topics_fts MATCH '${escapedQuery}')${topicConvFilter}
      ORDER BY created_at DESC
      LIMIT ${limit}`
   );
@@ -116,10 +118,11 @@ function ftsSearch(driver, query, limit) {
   }
 
   // Search decisions_fts
+  const decConvFilter = conversationId ? ` AND conversation_id = '${esc(conversationId)}'` : '';
   const decisions = driver.read(
     `SELECT id, description, context, participants, status, tags
      FROM decisions
-     WHERE id IN (SELECT rowid FROM decisions_fts WHERE decisions_fts MATCH '${escapedQuery}')
+     WHERE id IN (SELECT rowid FROM decisions_fts WHERE decisions_fts MATCH '${escapedQuery}')${decConvFilter}
      ORDER BY created_at DESC
      LIMIT ${limit}`
   );
@@ -139,11 +142,12 @@ function ftsSearch(driver, query, limit) {
   }
 
   // Search tasks_fts
+  const taskConvFilter = conversationId ? ` AND t.conversation_id = '${esc(conversationId)}'` : '';
   const tasks = driver.read(
     `SELECT t.id, t.description, t.assignee, t.status, t.tags, m.display_name as member
      FROM tasks t
      LEFT JOIN members m ON t.source_member_id = m.id
-     WHERE t.id IN (SELECT rowid FROM tasks_fts WHERE tasks_fts MATCH '${escapedQuery}')
+     WHERE t.id IN (SELECT rowid FROM tasks_fts WHERE tasks_fts MATCH '${escapedQuery}')${taskConvFilter}
      ORDER BY t.created_at DESC
      LIMIT ${limit}`
   );
@@ -163,10 +167,11 @@ function ftsSearch(driver, query, limit) {
   }
 
   // Search questions_fts
+  const qConvFilter = conversationId ? ` AND conversation_id = '${esc(conversationId)}'` : '';
   const questions = driver.read(
     `SELECT id, question, asker, answer, answered_by, status, tags
      FROM questions
-     WHERE id IN (SELECT rowid FROM questions_fts WHERE questions_fts MATCH '${escapedQuery}')
+     WHERE id IN (SELECT rowid FROM questions_fts WHERE questions_fts MATCH '${escapedQuery}')${qConvFilter}
      ORDER BY created_at DESC
      LIMIT ${limit}`
   );
@@ -187,10 +192,11 @@ function ftsSearch(driver, query, limit) {
   }
 
   // Search events_fts
+  const evtConvFilter = conversationId ? ` AND conversation_id = '${esc(conversationId)}'` : '';
   const events = driver.read(
     `SELECT id, name, description, event_date, location, attendees, tags
      FROM events
-     WHERE id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH '${escapedQuery}')
+     WHERE id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH '${escapedQuery}')${evtConvFilter}
      ORDER BY created_at DESC
      LIMIT ${limit}`
   );
@@ -214,33 +220,55 @@ function ftsSearch(driver, query, limit) {
 }
 
 /**
- * Run vector kNN search across facts_vec, topics_vec, and members_vec.
+ * Build a Set of entity IDs that were embedded by the given model.
+ * Returns null if modelId is falsy (no filtering needed).
+ */
+function buildModelFilter(db, entityType, modelId) {
+  if (!modelId) return null;
+  try {
+    const rows = db.prepare(
+      'SELECT entity_id FROM embedding_metadata WHERE entity_type = ? AND model_id = ?'
+    ).all(entityType, modelId);
+    return new Set(rows.map(r => r.entity_id));
+  } catch (_) {
+    return null; // table may not exist on older schemas
+  }
+}
+
+/**
+ * Run vector kNN search across all entity vec tables.
  * Requires driver._db (raw better-sqlite3) and sqlite-vec extension loaded.
  *
  * @param {object} driver - lizardbrain driver instance with ._db
  * @param {number[]} queryEmbedding - Query vector as array of floats
  * @param {number} limit - Max results per table
+ * @param {string|null} modelId - Filter to embeddings from this model (null = no filter)
  * @returns {Array<{key: string, data: object}>}
  */
-function vecSearch(driver, queryEmbedding, limit) {
+function vecSearch(driver, queryEmbedding, limit, modelId, conversationId) {
   const db = driver._db;
   const embeddingBuffer = new Float32Array(queryEmbedding);
   const results = [];
 
   // Search facts_vec
   try {
+    const fetchLimit = (modelId || conversationId) ? limit * 3 : limit;
     const factRows = db.prepare(
       `SELECT fact_id, distance FROM facts_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?`
-    ).all(embeddingBuffer, limit);
+    ).all(embeddingBuffer, fetchLimit);
+    const modelFilter = buildModelFilter(db, 'fact', modelId);
+    let count = 0;
 
     for (const row of factRows) {
+      if (count >= limit) break;
+      if (modelFilter && !modelFilter.has(row.fact_id)) continue;
       const fact = db.prepare(
-        `SELECT f.id, f.content, f.confidence, f.tags, f.category, m.display_name as member
+        `SELECT f.id, f.content, f.confidence, f.tags, f.category, f.conversation_id, m.display_name as member
          FROM facts f
          LEFT JOIN members m ON f.source_member_id = m.id
          WHERE f.id = ?`
       ).get(row.fact_id);
-      if (fact) {
+      if (fact && (!conversationId || fact.conversation_id === conversationId)) {
         results.push({
           key: `fact:${fact.id}`,
           data: {
@@ -253,6 +281,7 @@ function vecSearch(driver, queryEmbedding, limit) {
             category: fact.category,
           },
         });
+        count++;
       }
     }
   } catch (_) {
@@ -261,15 +290,20 @@ function vecSearch(driver, queryEmbedding, limit) {
 
   // Search topics_vec
   try {
+    const fetchLimit = (modelId || conversationId) ? limit * 3 : limit;
     const topicRows = db.prepare(
       `SELECT topic_id, distance FROM topics_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?`
-    ).all(embeddingBuffer, limit);
+    ).all(embeddingBuffer, fetchLimit);
+    const modelFilter = buildModelFilter(db, 'topic', modelId);
+    let count = 0;
 
     for (const row of topicRows) {
+      if (count >= limit) break;
+      if (modelFilter && !modelFilter.has(row.topic_id)) continue;
       const topic = db.prepare(
-        `SELECT id, name, summary, tags, participants FROM topics WHERE id = ?`
+        `SELECT id, name, summary, tags, participants, conversation_id FROM topics WHERE id = ?`
       ).get(row.topic_id);
-      if (topic) {
+      if (topic && (!conversationId || topic.conversation_id === conversationId)) {
         results.push({
           key: `topic:${topic.id}`,
           data: {
@@ -280,19 +314,25 @@ function vecSearch(driver, queryEmbedding, limit) {
             participants: topic.participants || '',
           },
         });
+        count++;
       }
     }
   } catch (_) {
     // topics_vec table may not exist yet
   }
 
-  // Search members_vec
+  // Search members_vec (no conversation_id filter — members span conversations)
   try {
+    const fetchLimit = modelId ? limit * 3 : limit;
     const memberRows = db.prepare(
       `SELECT member_id, distance FROM members_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?`
-    ).all(embeddingBuffer, limit);
+    ).all(embeddingBuffer, fetchLimit);
+    const modelFilter = buildModelFilter(db, 'member', modelId);
+    let count = 0;
 
     for (const row of memberRows) {
+      if (count >= limit) break;
+      if (modelFilter && !modelFilter.has(row.member_id)) continue;
       const member = db.prepare(
         `SELECT id, display_name, username, expertise, projects FROM members WHERE id = ?`
       ).get(row.member_id);
@@ -307,6 +347,7 @@ function vecSearch(driver, queryEmbedding, limit) {
             projects: member.projects || '',
           },
         });
+        count++;
       }
     }
   } catch (_) {
@@ -315,15 +356,20 @@ function vecSearch(driver, queryEmbedding, limit) {
 
   // Search decisions_vec
   try {
+    const fetchLimit = (modelId || conversationId) ? limit * 3 : limit;
     const decisionRows = db.prepare(
       `SELECT decision_id, distance FROM decisions_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?`
-    ).all(embeddingBuffer, limit);
+    ).all(embeddingBuffer, fetchLimit);
+    const modelFilter = buildModelFilter(db, 'decision', modelId);
+    let count = 0;
 
     for (const row of decisionRows) {
+      if (count >= limit) break;
+      if (modelFilter && !modelFilter.has(row.decision_id)) continue;
       const decision = db.prepare(
-        `SELECT id, description, context, participants, status, tags FROM decisions WHERE id = ?`
+        `SELECT id, description, context, participants, status, tags, conversation_id FROM decisions WHERE id = ?`
       ).get(row.decision_id);
-      if (decision) {
+      if (decision && (!conversationId || decision.conversation_id === conversationId)) {
         results.push({
           key: `decision:${decision.id}`,
           data: {
@@ -336,6 +382,7 @@ function vecSearch(driver, queryEmbedding, limit) {
             tags: decision.tags || '',
           },
         });
+        count++;
       }
     }
   } catch (_) {
@@ -344,16 +391,21 @@ function vecSearch(driver, queryEmbedding, limit) {
 
   // Search tasks_vec
   try {
+    const fetchLimit = (modelId || conversationId) ? limit * 3 : limit;
     const taskRows = db.prepare(
       `SELECT task_id, distance FROM tasks_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?`
-    ).all(embeddingBuffer, limit);
+    ).all(embeddingBuffer, fetchLimit);
+    const modelFilter = buildModelFilter(db, 'task', modelId);
+    let count = 0;
 
     for (const row of taskRows) {
+      if (count >= limit) break;
+      if (modelFilter && !modelFilter.has(row.task_id)) continue;
       const task = db.prepare(
-        `SELECT t.id, t.description, t.assignee, t.status, t.tags, m.display_name as member
+        `SELECT t.id, t.description, t.assignee, t.status, t.tags, t.conversation_id, m.display_name as member
          FROM tasks t LEFT JOIN members m ON t.source_member_id = m.id WHERE t.id = ?`
       ).get(row.task_id);
-      if (task) {
+      if (task && (!conversationId || task.conversation_id === conversationId)) {
         results.push({
           key: `task:${task.id}`,
           data: {
@@ -366,6 +418,7 @@ function vecSearch(driver, queryEmbedding, limit) {
             tags: task.tags || '',
           },
         });
+        count++;
       }
     }
   } catch (_) {
@@ -374,15 +427,20 @@ function vecSearch(driver, queryEmbedding, limit) {
 
   // Search questions_vec
   try {
+    const fetchLimit = (modelId || conversationId) ? limit * 3 : limit;
     const questionRows = db.prepare(
       `SELECT question_id, distance FROM questions_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?`
-    ).all(embeddingBuffer, limit);
+    ).all(embeddingBuffer, fetchLimit);
+    const modelFilter = buildModelFilter(db, 'question', modelId);
+    let count = 0;
 
     for (const row of questionRows) {
+      if (count >= limit) break;
+      if (modelFilter && !modelFilter.has(row.question_id)) continue;
       const question = db.prepare(
-        `SELECT id, question, asker, answer, answered_by, status, tags FROM questions WHERE id = ?`
+        `SELECT id, question, asker, answer, answered_by, status, tags, conversation_id FROM questions WHERE id = ?`
       ).get(row.question_id);
-      if (question) {
+      if (question && (!conversationId || question.conversation_id === conversationId)) {
         results.push({
           key: `question:${question.id}`,
           data: {
@@ -396,6 +454,7 @@ function vecSearch(driver, queryEmbedding, limit) {
             tags: question.tags || '',
           },
         });
+        count++;
       }
     }
   } catch (_) {
@@ -404,15 +463,20 @@ function vecSearch(driver, queryEmbedding, limit) {
 
   // Search events_vec
   try {
+    const fetchLimit = (modelId || conversationId) ? limit * 3 : limit;
     const eventRows = db.prepare(
       `SELECT event_id, distance FROM events_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?`
-    ).all(embeddingBuffer, limit);
+    ).all(embeddingBuffer, fetchLimit);
+    const modelFilter = buildModelFilter(db, 'event', modelId);
+    let count = 0;
 
     for (const row of eventRows) {
+      if (count >= limit) break;
+      if (modelFilter && !modelFilter.has(row.event_id)) continue;
       const event = db.prepare(
-        `SELECT id, name, description, event_date, location, attendees, tags FROM events WHERE id = ?`
+        `SELECT id, name, description, event_date, location, attendees, tags, conversation_id FROM events WHERE id = ?`
       ).get(row.event_id);
-      if (event) {
+      if (event && (!conversationId || event.conversation_id === conversationId)) {
         results.push({
           key: `event:${event.id}`,
           data: {
@@ -426,6 +490,7 @@ function vecSearch(driver, queryEmbedding, limit) {
             tags: event.tags || '',
           },
         });
+        count++;
       }
     }
   } catch (_) {
@@ -447,10 +512,10 @@ function vecSearch(driver, queryEmbedding, limit) {
  * @returns {Promise<{mode: 'hybrid'|'fts5', results: Array}>}
  */
 async function search(driver, query, options = {}) {
-  const { limit = 10, ftsOnly = false, embeddingConfig = null } = options;
+  const { limit = 10, ftsOnly = false, embeddingConfig = null, conversationId = null } = options;
   const ftsLimit = limit * 2;
 
-  const ftsResults = ftsSearch(driver, query, ftsLimit);
+  const ftsResults = ftsSearch(driver, query, ftsLimit, conversationId);
 
   const canDoVec = !ftsOnly && driver.capabilities.vectors && embeddingConfig;
 
@@ -459,7 +524,7 @@ async function search(driver, query, options = {}) {
       const embeddings = require('./embeddings');
       const { embeddings: vecs } = await embeddings.embedWithRetry([query], embeddingConfig);
       const queryVector = vecs[0];
-      const vecResults = vecSearch(driver, queryVector, ftsLimit);
+      const vecResults = vecSearch(driver, queryVector, ftsLimit, embeddingConfig.model, conversationId);
       const merged = mergeRRF([ftsResults, vecResults]);
 
       const results = merged.slice(0, limit).map(item => {

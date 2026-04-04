@@ -36,6 +36,10 @@ const DEFAULTS = {
     dimensions: null,
     batchTokenLimit: 8000,
   },
+  dedup: {
+    semantic: false,
+    threshold: 0.15,
+  },
   profile: null,
   entities: null,
   factCategories: null,
@@ -113,6 +117,10 @@ function load(configPath) {
       model: fileConfig.embedding?.model || process.env.LIZARDBRAIN_EMBEDDING_MODEL || DEFAULTS.embedding.model,
       dimensions: fileConfig.embedding?.dimensions || DEFAULTS.embedding.dimensions,
       batchTokenLimit: fileConfig.embedding?.batchTokenLimit || parseInt(process.env.LIZARDBRAIN_EMBEDDING_BATCH_LIMIT) || DEFAULTS.embedding.batchTokenLimit,
+    },
+    dedup: {
+      semantic: fileConfig.dedup?.semantic || DEFAULTS.dedup.semantic,
+      threshold: fileConfig.dedup?.threshold || DEFAULTS.dedup.threshold,
     },
   };
 

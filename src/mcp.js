@@ -42,6 +42,7 @@ function createHandlers(driver, config) {
           limit: (args.types ? (args.limit || 10) * 3 : args.limit) || 10,
           ftsOnly: args.ftsOnly || false,
           embeddingConfig: config?.embedding?.enabled ? config.embedding : null,
+          conversationId: args.conversationId || null,
         });
         let results = raw.results.map(r => ({
           type: r.source,
@@ -106,6 +107,7 @@ function createHandlers(driver, config) {
         const messageDate = new Date().toISOString();
         const counts = store.processExtraction(driver, extracted, messageDate, {
           sourceAgent: args.sourceAgent || null,
+          conversationId: args.conversationId || null,
         });
         return {
           isError: false,
@@ -244,6 +246,7 @@ function createServer({ driver, config = {} }) {
       types: z.array(z.string()).optional().describe('Filter to entity types, e.g. ["fact", "decision"]'),
       limit: z.number().optional().describe('Max results (default: 10)'),
       ftsOnly: z.boolean().optional().describe('Skip vector search (default: false)'),
+      conversationId: z.string().optional().describe('Filter results to a specific conversation'),
     },
     async (args) => {
       const result = await handlers.search(args);
@@ -336,6 +339,7 @@ function createServer({ driver, config = {} }) {
         tags: z.string().optional(),
       })).optional().describe('Events to add'),
       sourceAgent: z.string().optional().describe('Name of the agent contributing this knowledge'),
+      conversationId: z.string().optional().describe('Conversation this knowledge came from'),
     },
     async (args) => {
       const result = await handlers.add_knowledge(args);
